@@ -14,24 +14,11 @@ use std::{
     time::Duration,
     thread,
 };
-use tracing_subscriber::{fmt::format::FmtSpan, EnvFilter};
 
 fn main() -> Result<()> {
-    let formatter = tracing_subscriber::fmt()
-        .with_span_events(if std::env::var("LOG_TIMING").is_ok() {
-            FmtSpan::CLOSE
-        } else {
-            FmtSpan::NONE
-        })
-        .with_env_filter(EnvFilter::from_default_env());
-    if std::env::var("LOG_PRETTY").is_ok() {
-        formatter.pretty().init();
-    } else {
-        formatter.init();
-    }
-
-    let api = HidApi::new()?;
+    let mut api = HidApi::new()?;
     loop {
+        api.refresh_devices()?;
         if let Some(device_info) = api
             .device_list()
             .find(|x| x.vendor_id() == NINTENDO_VENDOR_ID && HID_IDS.contains(&x.product_id()))
@@ -40,17 +27,17 @@ fn main() -> Result<()> {
                 .open_device(&api)
                 .with_context(|| format!("error opening the HID device {:?}", device_info))?;
 
-            let joycon = JoyCon::new(device, device_info.clone())?;
-
-            hid_main(joycon).context("error running the command")?;
-
-            break;
+            // NOTE: 接続が中途半端な際、ここでよくパニックする。
+            let _ = std::panic::catch_unwind(|| -> Result<()> {
+                let joycon = JoyCon::new(device, device_info.clone())?;
+                hid_main(joycon).context("error running the command")?;
+                Ok(())
+            });
         } else {
             eprintln!("No device found");
-            break;
+            thread::sleep(Duration::from_secs(1));
         }
     }
-    Ok(())
 }
 
 fn hid_main(mut joycon: JoyCon) -> Result<()> {
@@ -99,8 +86,16 @@ fn monitor(joycon: &mut JoyCon) -> Result<()> {
         let r = Arc::new(Mutex::new(false));
         let _r = Arc::clone(&r);
 
+        // コントローラーの姿勢
+        let rot = Arc::new(Mutex::new(0.0));
+        let _rot = Arc::clone(&rot);
+
+        // 割り込みシグナル
+        let interrupt = Arc::new(Mutex::new(false));
+        let _interrupt = Arc::clone(&interrupt);
+
         // 状態取得スレッド(コントローラーの状況によって固まる)
-        s.spawn(move || -> Result<()> {
+        let handler = s.spawn(move || -> Result<()> {
             let mut enigo = Enigo::new();
 
             // ボタンの状態
@@ -119,6 +114,11 @@ fn monitor(joycon: &mut JoyCon) -> Result<()> {
 
                     let mut gz = _gz.lock().unwrap();
                     *gz = frame.gyro.z;
+
+                    // コントローラーの姿勢(加速度センサでドリフト修正)
+                    let arot = (frame.accel[1] / frame.accel[2]).atan().to_degrees();
+                    let mut rot = _rot.lock().unwrap();
+                    *rot = (*rot - frame.gyro.x * 0.005) * 0.95 + arot * 0.05;
                 }
 
                 // スティックの値
@@ -198,6 +198,11 @@ fn monitor(joycon: &mut JoyCon) -> Result<()> {
             let mut last_r = false;
 
             loop {
+                // 割り込み
+                if *_interrupt.lock().unwrap() {
+                    break;
+                }
+
                 // Rの押下状態(切替時は速度をリセット)
                 let ur = *r.lock().unwrap();
                 if last_r != ur {
@@ -213,8 +218,13 @@ fn monitor(joycon: &mut JoyCon) -> Result<()> {
                 vy = (vy - (if usy.abs() < 0.1 { 0.0 } else { usy }) * 2.0) * 0.9;
 
                 // 最終的に動かす量
-                let dx = vx + *gz.lock().unwrap() / 8.0;
-                let dy = vy - *gy.lock().unwrap() / 8.0;
+                let radians = rot.lock().unwrap().to_radians();
+                let ugz = *gz.lock().unwrap();
+                let ugy = *gy.lock().unwrap();
+                let cos = radians.cos();
+                let sin = radians.sin();
+                let dx = vx + (ugz * cos + ugy * sin) / 8.0;
+                let dy = vy + (ugz * sin - ugy * cos) / 8.0;
 
                 if ur {
                     // R押下中はホイール扱い
@@ -229,7 +239,12 @@ fn monitor(joycon: &mut JoyCon) -> Result<()> {
                 thread::sleep(Duration::from_millis(5));
             }
         });
+
+        // センサースレッドが終了(切断等)したら、UIスレッドも落とす。
+        let _ = handler.join().unwrap();
+        let mut _interrupt = interrupt.lock().unwrap();
+        *_interrupt = true;
     });
 
-    loop {}
+    Ok(())
 }

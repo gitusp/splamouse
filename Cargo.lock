@@ -2013,8 +2013,6 @@ dependencies = [
  "joycon",
  "libc",
  "socket2",
- "tracing",
- "tracing-subscriber",
 ]
 
 [[package]]

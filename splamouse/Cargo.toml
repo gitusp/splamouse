@@ -10,8 +10,6 @@ anyhow = "1.0.53"
 cgmath = "0.18.0"
 enigo = { version = "0.0.14", optional = false, default-features = false }
 joycon = { path = "../crates/joycon", features = ["ir"] }
-tracing = "0.1.31"
-tracing-subscriber = { version = "0.3.8", features = ["env-filter"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 libc = "0.2.118"
