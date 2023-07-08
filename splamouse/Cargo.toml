@@ -1,0 +1,19 @@
+[package]
+name = "splamouse"
+license = "MIT"
+version = "0.1.0"
+authors = ["usp <ususso@gmail.com>"]
+edition = "2018"
+
+[dependencies]
+anyhow = "1.0.53"
+cgmath = "0.18.0"
+enigo = { version = "0.0.14", optional = false, default-features = false }
+joycon = { path = "../crates/joycon", features = ["ir"] }
+tracing = "0.1.31"
+tracing-subscriber = { version = "0.3.8", features = ["env-filter"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = "0.2.118"
+socket2 = "0.4.4"
+bluetooth-sys = "0.1.0"

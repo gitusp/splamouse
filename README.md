@@ -16,6 +16,7 @@ The tools can be run with `cargo run --bin <tool>`.
 
 - `joytk`: main front-facing tool.
 - `joy-infrared`: visualize the images captured by the infrared camera of the Joycon(R) as a realtime 3D view.
+- `splamouse`: mouse emulator like Splatoon.
 
 ## Libraries
 
