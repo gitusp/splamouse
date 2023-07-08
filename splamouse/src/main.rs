@@ -1,5 +1,4 @@
 use anyhow::{Context, Result};
-use cgmath::{Vector3};
 use enigo::*;
 use joycon::{
     hidapi::HidApi,
@@ -10,10 +9,11 @@ use joycon::{
     },
     JoyCon,
 };
+use std::sync::{Mutex, Arc};
 use std::{
     time::Duration,
+    thread,
 };
-use std::{time::Instant};
 use tracing_subscriber::{fmt::format::FmtSpan, EnvFilter};
 
 fn main() -> Result<()> {
@@ -82,114 +82,154 @@ fn monitor(joycon: &mut JoyCon) -> Result<()> {
     joycon.enable_imu()?;
     joycon.load_calibration()?;
 
-    let mut now = Instant::now();
-    let mut enigo = Enigo::new();
+    thread::scope(|s| {
+        // ジャイロの値
+        let gy = Arc::new(Mutex::new(0.0));
+        let gz = Arc::new(Mutex::new(0.0));
+        let _gy = Arc::clone(&gy);
+        let _gz = Arc::clone(&gz);
 
-    let mut vx = 0.0;
-    let mut vy = 0.0;
+        // スティックの値
+        let sx = Arc::new(Mutex::new(0.0));
+        let sy = Arc::new(Mutex::new(0.0));
+        let _sx = Arc::clone(&sx);
+        let _sy = Arc::clone(&sy);
 
-    let mut a = false;
-    let mut x = false;
-    let mut y = false;
-    let mut r = false;
-    let mut zr = false;
+        // Rボタン
+        let r = Arc::new(Mutex::new(false));
+        let _r = Arc::clone(&r);
 
-    loop {
-        let report = joycon.tick()?;
-        let mut last_rot = Vector3::unit_x();
+        // 状態取得スレッド(コントローラーの状況によって固まる)
+        s.spawn(move || -> Result<()> {
+            let mut enigo = Enigo::new();
 
-        for frame in &report.imu.unwrap() {
-            last_rot = frame.gyro;
-        }
+            // ボタンの状態
+            let mut a = false;
+            let mut x = false;
+            let mut y = false;
+            let mut zr = false;
 
-        // Aボタン押下時
-        if report.buttons.right.a() {
-            if !a {
-                enigo.key_down(Key::Meta);
-                enigo.key_click(Key::RightArrow);
-                enigo.key_up(Key::Meta);
-                a = true;
+            loop {
+                let report = joycon.tick()?;
+
+                // ジャイロの値
+                for frame in &report.imu.unwrap() {
+                    let mut gy = _gy.lock().unwrap();
+                    *gy = frame.gyro.y;
+
+                    let mut gz = _gz.lock().unwrap();
+                    *gz = frame.gyro.z;
+                }
+
+                // スティックの値
+                let mut sx = _sx.lock().unwrap();
+                *sx = report.right_stick.x;
+
+                let mut sy = _sy.lock().unwrap();
+                *sy = report.right_stick.y;
+
+                // Aボタン押下時
+                if report.buttons.right.a() {
+                    if !a {
+                        enigo.key_down(Key::Meta);
+                        enigo.key_click(Key::RightArrow);
+                        enigo.key_up(Key::Meta);
+                        a = true;
+                    }
+                } else {
+                    if a {
+                        a = false;
+                    }
+                }
+
+                // Xボタン押下時
+                if report.buttons.right.x() {
+                    if !x {
+                        enigo.key_down(Key::Control);
+                        x = true;
+                    }
+                } else {
+                    if x {
+                        enigo.key_up(Key::Control);
+                        x = false;
+                    }
+                }
+
+                // Yボタン押下時
+                if report.buttons.right.y() {
+                    if !y {
+                        enigo.key_down(Key::Meta);
+                        enigo.key_click(Key::LeftArrow);
+                        enigo.key_up(Key::Meta);
+                        y = true;
+                    }
+                } else {
+                    if y {
+                        y = false;
+                    }
+                }
+
+                // Rボタン押下時
+                let mut r = _r.lock().unwrap();
+                *r = report.buttons.right.r();
+
+                // ZRボタン押下時
+                if report.buttons.right.zr() {
+                    if !zr {
+                        enigo.mouse_down(MouseButton::Left);
+                        zr = true;
+                    }
+                } else {
+                    if zr {
+                        enigo.mouse_up(MouseButton::Left);
+                        zr = false;
+                    }
+                }
             }
-        } else {
-            if a {
-                a = false;
-            }
-        }
+        });
 
-        // Xボタン押下時
-        if report.buttons.right.x() {
-            if !x {
-                enigo.key_down(Key::Control);
-                x = true;
-            }
-        } else {
-            if x {
-                enigo.key_up(Key::Control);
-                x = false;
-            }
-        }
+        // UI更新スレッド(リフレッシュレートより速い)
+        s.spawn(move || {
+            let mut enigo = Enigo::new();
 
-        // Yボタン押下時
-        if report.buttons.right.y() {
-            if !y {
-                enigo.key_down(Key::Meta);
-                enigo.key_click(Key::LeftArrow);
-                enigo.key_up(Key::Meta);
-                y = true;
-            }
-        } else {
-            if y {
-                y = false;
-            }
-        }
+            let mut vx = 0.0;
+            let mut vy = 0.0;
 
-        // Rボタン押下時
-        if report.buttons.right.r() {
-            if !r {
-                vx = 0.0;
-                vy = 0.0;
-                r = true;
-            }
-        } else {
-            if r {
-                vx = 0.0;
-                vy = 0.0;
-                r = false;
-            }
-        }
+            let mut last_r = false;
 
-        // ZRボタン押下時
-        if report.buttons.right.zr() {
-            if !zr {
-                enigo.mouse_down(MouseButton::Left);
-                zr = true;
+            loop {
+                // Rの押下状態(切替時は速度をリセット)
+                let ur = *r.lock().unwrap();
+                if last_r != ur {
+                    vx = 0.0;
+                    vy = 0.0;
+                    last_r = ur;
+                }
+
+                // 速度の調整(ドリフト防止のため微量のスティックは無視)
+                let usx = *sx.lock().unwrap();
+                let usy = *sy.lock().unwrap();
+                vx = (vx + (if usx.abs() < 0.1 { 0.0 } else { usx }) * 2.0) * 0.9;
+                vy = (vy - (if usy.abs() < 0.1 { 0.0 } else { usy }) * 2.0) * 0.9;
+
+                // 最終的に動かす量
+                let dx = vx + *gz.lock().unwrap() / 8.0;
+                let dy = vy - *gy.lock().unwrap() / 8.0;
+
+                if ur {
+                    // R押下中はホイール扱い
+                    enigo.mouse_scroll_x((dx / 12.0) as i32);
+                    enigo.mouse_scroll_y((dy / 12.0) as i32);
+                } else {
+                    // マウス移動
+                    enigo.mouse_move_relative(dx as i32, dy as i32);
+                }
+
+                // 5ms毎に実行
+                thread::sleep(Duration::from_millis(5));
             }
-        } else {
-            if zr {
-                enigo.mouse_up(MouseButton::Left);
-                zr = false;
-            }
-        }
+        });
+    });
 
-        if now.elapsed() > Duration::from_millis(15) {
-            now = Instant::now();
-
-            // 微量のスティックは無視(ドリフト防止)
-            let x = if report.right_stick.x.abs() < 0.1 { 0.0 } else { report.right_stick.x };
-            let y = if report.right_stick.y.abs() < 0.1 { 0.0 } else { report.right_stick.y };
-
-            // 加速度の調整
-            vx = (vx + x * 16.0) * 0.8;
-            vy = (vy - y * 16.0) * 0.8;
-
-            if r {
-                // R押下中はホイール扱い
-                enigo.mouse_scroll_x(((vx + last_rot.z / 8.0) / 8.0) as i32);
-                enigo.mouse_scroll_y(((vy - last_rot.y / 8.0) / 8.0) as i32);
-            } else {
-                // マウス移動
-                enigo.mouse_move_relative((vx + last_rot.z / 4.0) as i32, (vy - last_rot.y / 4.0) as i32);
-            }
-        }
-    }
+    loop {}
 }
