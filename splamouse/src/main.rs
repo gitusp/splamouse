@@ -192,8 +192,13 @@ fn monitor(joycon: &mut JoyCon) -> Result<()> {
         s.spawn(move || {
             let mut enigo = Enigo::new();
 
+            // 速度
             let mut vx = 0.0;
             let mut vy = 0.0;
+
+            // 端数
+            let mut fx = 0.0;
+            let mut fy = 0.0;
 
             let mut last_r = false;
 
@@ -208,6 +213,8 @@ fn monitor(joycon: &mut JoyCon) -> Result<()> {
                 if last_r != ur {
                     vx = 0.0;
                     vy = 0.0;
+                    fx = 0.0;
+                    fy = 0.0;
                     last_r = ur;
                 }
 
@@ -217,22 +224,32 @@ fn monitor(joycon: &mut JoyCon) -> Result<()> {
                 vx = (vx + (if usx.abs() < 0.1 { 0.0 } else { usx }) * 2.0) * 0.9;
                 vy = (vy - (if usy.abs() < 0.1 { 0.0 } else { usy }) * 2.0) * 0.9;
 
-                // 最終的に動かす量
+                // モーション分
                 let radians = rot.lock().unwrap().to_radians();
                 let ugz = *gz.lock().unwrap();
                 let ugy = *gy.lock().unwrap();
                 let cos = radians.cos();
                 let sin = radians.sin();
-                let dx = vx + (ugz * cos + ugy * sin) / 8.0;
-                let dy = vy + (ugz * sin - ugy * cos) / 8.0;
+                let mx = (ugz * cos + ugy * sin) / 8.0;
+                let my = (ugz * sin - ugy * cos) / 8.0;
+
+                // 最終的に動かす量(ドリフト防止のため微量のモーションは無視)
+                let dx = (vx + (if mx.abs() < 0.1 { 0.0 } else { mx })) / (if ur { 12.0 } else { 1.0 }) + fx;
+                let dy = (vy + (if my.abs() < 0.1 { 0.0 } else { my })) / (if ur { 12.0 } else { 1.0 }) + fy;
+
+                // 端数を持ち越し
+                let rdx = dx.round();
+                let rdy = dy.round();
+                fx = dx - rdx;
+                fy = dy - rdy;
 
                 if ur {
                     // R押下中はホイール扱い
-                    enigo.mouse_scroll_x((dx / 12.0) as i32);
-                    enigo.mouse_scroll_y((dy / 12.0) as i32);
+                    enigo.mouse_scroll_x(rdx as i32);
+                    enigo.mouse_scroll_y(rdy as i32);
                 } else {
                     // マウス移動
-                    enigo.mouse_move_relative(dx as i32, dy as i32);
+                    enigo.mouse_move_relative(rdx as i32, rdy as i32);
                 }
 
                 // 5ms毎に実行
