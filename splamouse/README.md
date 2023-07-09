@@ -7,9 +7,10 @@ The mouse cursor behavior is inspired by Splatoon.
 |---------|------------------------------------------------------|
 | R-stick | Mouse move                                           |
 | Motion  | Mouse move                                           |
-| ZR      | Left click                                           |
+| ZR      | Left click on release                                |
 | R       | Pan mode(treats mouse move as wheel)                 |
-| X       | Control(can be combined with ZR to emit right click) |
-| Y       | Meta + Left arrow(browser back)                      |
 | A       | Meta + Right arrow(browser forward)                  |
+| B       | Meta + Left arrow(browser back)                      |
+| X       | Control(can be combined with ZR to emit right click) |
+| Y + ZR  | Drag                                                 |
 

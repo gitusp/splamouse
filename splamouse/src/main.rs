@@ -100,8 +100,9 @@ fn monitor(joycon: &mut JoyCon) -> Result<()> {
 
             // ボタンの状態
             let mut a = false;
+            let mut b = false;
             let mut x = false;
-            let mut y = false;
+            let mut drag = false;
             let mut zr = false;
 
             loop {
@@ -142,6 +143,20 @@ fn monitor(joycon: &mut JoyCon) -> Result<()> {
                     }
                 }
 
+                // Bボタン押下時
+                if report.buttons.right.b() {
+                    if !b {
+                        enigo.key_down(Key::Meta);
+                        enigo.key_click(Key::LeftArrow);
+                        enigo.key_up(Key::Meta);
+                        b = true;
+                    }
+                } else {
+                    if b {
+                        b = false;
+                    }
+                }
+
                 // Xボタン押下時
                 if report.buttons.right.x() {
                     if !x {
@@ -155,20 +170,6 @@ fn monitor(joycon: &mut JoyCon) -> Result<()> {
                     }
                 }
 
-                // Yボタン押下時
-                if report.buttons.right.y() {
-                    if !y {
-                        enigo.key_down(Key::Meta);
-                        enigo.key_click(Key::LeftArrow);
-                        enigo.key_up(Key::Meta);
-                        y = true;
-                    }
-                } else {
-                    if y {
-                        y = false;
-                    }
-                }
-
                 // Rボタン押下時
                 let mut r = _r.lock().unwrap();
                 *r = report.buttons.right.r();
@@ -176,12 +177,20 @@ fn monitor(joycon: &mut JoyCon) -> Result<()> {
                 // ZRボタン押下時
                 if report.buttons.right.zr() {
                     if !zr {
-                        enigo.mouse_down(MouseButton::Left);
+                        if report.buttons.right.y() {
+                            enigo.mouse_down(MouseButton::Left);
+                            drag = true;
+                        }
                         zr = true;
                     }
                 } else {
                     if zr {
-                        enigo.mouse_up(MouseButton::Left);
+                        if drag {
+                            enigo.mouse_up(MouseButton::Left);
+                            drag = false;
+                        } else {
+                            enigo.mouse_click(MouseButton::Left);
+                        }
                         zr = false;
                     }
                 }
