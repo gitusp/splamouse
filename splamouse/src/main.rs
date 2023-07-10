@@ -185,13 +185,13 @@ fn monitor(joycon: &mut JoyCon) -> Result<()> {
                 if report.buttons.middle.minus() {
                     if !minus {
                         enigo.key_down(Key::Meta);
-                        enigo.key_down(Key::Layout('w'));
+                        enigo.key_down(Key::Raw(0x0D));
                         should_sleep = true;
                         minus = true;
                     }
                 } else {
                     if minus {
-                        enigo.key_up(Key::Layout('w'));
+                        enigo.key_up(Key::Raw(0x0D));
                         enigo.key_up(Key::Meta);
                         should_sleep = true;
                         minus = false;
@@ -202,13 +202,13 @@ fn monitor(joycon: &mut JoyCon) -> Result<()> {
                 if report.buttons.middle.plus() {
                     if !plus {
                         enigo.key_down(Key::Meta);
-                        enigo.key_down(Key::Layout('t'));
+                        enigo.key_down(Key::Raw(0x11));
                         should_sleep = true;
                         plus = true;
                     }
                 } else {
                     if plus {
-                        enigo.key_up(Key::Layout('t'));
+                        enigo.key_up(Key::Raw(0x11));
                         enigo.key_up(Key::Meta);
                         should_sleep = true;
                         plus = false;
@@ -255,13 +255,13 @@ fn monitor(joycon: &mut JoyCon) -> Result<()> {
                 if report.buttons.left.down() {
                     if !down {
                         enigo.key_down(Key::Meta);
-                        enigo.key_down(Key::Layout('c'));
+                        enigo.key_down(Key::Raw(0x08));
                         should_sleep = true;
                         down = true;
                     }
                 } else {
                     if down {
-                        enigo.key_up(Key::Layout('c'));
+                        enigo.key_up(Key::Raw(0x08));
                         enigo.key_up(Key::Meta);
                         should_sleep = true;
                         down = false;
@@ -272,13 +272,13 @@ fn monitor(joycon: &mut JoyCon) -> Result<()> {
                 if report.buttons.left.up() {
                     if !up {
                         enigo.key_down(Key::Meta);
-                        enigo.key_down(Key::Layout('v'));
+                        enigo.key_down(Key::Raw(0x09));
                         should_sleep = true;
                         up = true;
                     }
                 } else {
                     if up {
-                        enigo.key_up(Key::Layout('v'));
+                        enigo.key_up(Key::Raw(0x09));
                         enigo.key_up(Key::Meta);
                         should_sleep = true;
                         up = false;

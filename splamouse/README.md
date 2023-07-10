@@ -44,3 +44,4 @@ The behavior is heavily inspired by Splatoon.
 - Your controller may lose connection when there's no interaction for a while.
 - If your controller is connected to your computer properly, but the cursor is not moving, try wiggling your stick.
 - Reconnect your controller and restart this program if the connection problem still remains.
+    - It is more reliable to delete the device once when reconnecting.
