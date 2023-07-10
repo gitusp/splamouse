@@ -101,7 +101,6 @@ fn monitor(joycon: &mut JoyCon) -> Result<()> {
             // ボタンの状態
             let mut a = false;
             let mut b = false;
-            let mut x = false;
             let mut drag = false;
             let mut zr = false;
 
@@ -157,19 +156,6 @@ fn monitor(joycon: &mut JoyCon) -> Result<()> {
                     }
                 }
 
-                // Xボタン押下時
-                if report.buttons.right.x() {
-                    if !x {
-                        enigo.key_down(Key::Control);
-                        x = true;
-                    }
-                } else {
-                    if x {
-                        enigo.key_up(Key::Control);
-                        x = false;
-                    }
-                }
-
                 // Rボタン押下時
                 let mut r = _r.lock().unwrap();
                 *r = report.buttons.right.r();
@@ -189,7 +175,9 @@ fn monitor(joycon: &mut JoyCon) -> Result<()> {
                             enigo.mouse_up(MouseButton::Left);
                             drag = false;
                         } else {
-                            enigo.mouse_click(MouseButton::Left);
+                            enigo.mouse_click(
+                                if report.buttons.right.x() { MouseButton::Right } else { MouseButton::Left }
+                            );
                         }
                         zr = false;
                     }
