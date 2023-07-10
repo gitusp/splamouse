@@ -16,12 +16,14 @@ The mouse cursor behavior is heavily inspired by Splatoon.
 
 ## How to use
 
-- Connect your Joycon(R) to your computer via bluetooth.
-- Download the latest binary from [releases](https://github.com/gitusp/splamouse/releases).
-    - There's for Apple Silicon and for x86_64.
-- Double click to open the downloaded binary.
+- Connect your Joycon(R) to your computer via Bluetooth.
+- Download the latest binary from [Releases](https://github.com/gitusp/splamouse/releases).
+    - There's for Apple Silicon(splamouse-macos-apple_silicon.zip) and for x86_64(splamouse-macos-x86_64.zip).
+- Double click the downloaded zip to unarchive.
+- Double click the unarchived binary to open.
+    - A Terminal window may pop up.
     - Allow the program to be opened if a security dialog pops up.
-    - The program may also requests an accessibility permission.
+    - Terminal app may also requests an accessibility permission for mouse operations.
 - Then you can control the cursor with your Joycon :tada:
 
 ## Tips
