@@ -117,6 +117,8 @@ fn monitor(joycon: &mut JoyCon) -> Result<()> {
             let mut rstick = false;
 
             loop {
+                let mut should_sleep = false;
+
                 let report = joycon.tick()?;
 
                 // ジャイロの値
@@ -149,12 +151,15 @@ fn monitor(joycon: &mut JoyCon) -> Result<()> {
                 if report.buttons.right.a() {
                     if !a {
                         enigo.key_down(Key::Meta);
-                        enigo.key_click(Key::RightArrow);
-                        enigo.key_up(Key::Meta);
+                        enigo.key_down(Key::RightArrow);
+                        should_sleep = true;
                         a = true;
                     }
                 } else {
                     if a {
+                        enigo.key_up(Key::RightArrow);
+                        enigo.key_up(Key::Meta);
+                        should_sleep = true;
                         a = false;
                     }
                 }
@@ -163,12 +168,15 @@ fn monitor(joycon: &mut JoyCon) -> Result<()> {
                 if report.buttons.right.b() {
                     if !b {
                         enigo.key_down(Key::Meta);
-                        enigo.key_click(Key::LeftArrow);
-                        enigo.key_up(Key::Meta);
+                        enigo.key_down(Key::LeftArrow);
+                        should_sleep = true;
                         b = true;
                     }
                 } else {
                     if b {
+                        enigo.key_up(Key::LeftArrow);
+                        enigo.key_up(Key::Meta);
+                        should_sleep = true;
                         b = false;
                     }
                 }
@@ -177,12 +185,15 @@ fn monitor(joycon: &mut JoyCon) -> Result<()> {
                 if report.buttons.middle.minus() {
                     if !minus {
                         enigo.key_down(Key::Meta);
-                        enigo.key_click(Key::Layout('w'));
-                        enigo.key_up(Key::Meta);
+                        enigo.key_down(Key::Layout('w'));
+                        should_sleep = true;
                         minus = true;
                     }
                 } else {
                     if minus {
+                        enigo.key_up(Key::Layout('w'));
+                        enigo.key_up(Key::Meta);
+                        should_sleep = true;
                         minus = false;
                     }
                 }
@@ -191,12 +202,15 @@ fn monitor(joycon: &mut JoyCon) -> Result<()> {
                 if report.buttons.middle.plus() {
                     if !plus {
                         enigo.key_down(Key::Meta);
-                        enigo.key_click(Key::Layout('t'));
-                        enigo.key_up(Key::Meta);
+                        enigo.key_down(Key::Layout('t'));
+                        should_sleep = true;
                         plus = true;
                     }
                 } else {
                     if plus {
+                        enigo.key_up(Key::Layout('t'));
+                        enigo.key_up(Key::Meta);
+                        should_sleep = true;
                         plus = false;
                     }
                 }
@@ -206,13 +220,16 @@ fn monitor(joycon: &mut JoyCon) -> Result<()> {
                     if !left {
                         enigo.key_down(Key::Control);
                         enigo.key_down(Key::Shift);
-                        enigo.key_click(Key::Tab);
-                        enigo.key_up(Key::Shift);
-                        enigo.key_up(Key::Control);
+                        enigo.key_down(Key::Tab);
+                        should_sleep = true;
                         left = true;
                     }
                 } else {
                     if left {
+                        enigo.key_up(Key::Tab);
+                        enigo.key_up(Key::Shift);
+                        enigo.key_up(Key::Control);
+                        should_sleep = true;
                         left = false;
                     }
                 }
@@ -221,12 +238,15 @@ fn monitor(joycon: &mut JoyCon) -> Result<()> {
                 if report.buttons.left.right() {
                     if !right {
                         enigo.key_down(Key::Control);
-                        enigo.key_click(Key::Tab);
-                        enigo.key_up(Key::Control);
+                        enigo.key_down(Key::Tab);
+                        should_sleep = true;
                         right = true;
                     }
                 } else {
                     if right {
+                        enigo.key_up(Key::Tab);
+                        enigo.key_up(Key::Control);
+                        should_sleep = true;
                         right = false;
                     }
                 }
@@ -235,12 +255,15 @@ fn monitor(joycon: &mut JoyCon) -> Result<()> {
                 if report.buttons.left.down() {
                     if !down {
                         enigo.key_down(Key::Meta);
-                        enigo.key_click(Key::Layout('c'));
-                        enigo.key_up(Key::Meta);
+                        enigo.key_down(Key::Layout('c'));
+                        should_sleep = true;
                         down = true;
                     }
                 } else {
                     if down {
+                        enigo.key_up(Key::Layout('c'));
+                        enigo.key_up(Key::Meta);
+                        should_sleep = true;
                         down = false;
                     }
                 }
@@ -249,12 +272,15 @@ fn monitor(joycon: &mut JoyCon) -> Result<()> {
                 if report.buttons.left.up() {
                     if !up {
                         enigo.key_down(Key::Meta);
-                        enigo.key_click(Key::Layout('v'));
-                        enigo.key_up(Key::Meta);
+                        enigo.key_down(Key::Layout('v'));
+                        should_sleep = true;
                         up = true;
                     }
                 } else {
                     if up {
+                        enigo.key_up(Key::Layout('v'));
+                        enigo.key_up(Key::Meta);
+                        should_sleep = true;
                         up = false;
                     }
                 }
@@ -262,11 +288,14 @@ fn monitor(joycon: &mut JoyCon) -> Result<()> {
                 // R-stick押下時
                 if report.buttons.middle.rstick() {
                     if !rstick {
-                        enigo.key_click(Key::Return);
+                        enigo.key_down(Key::Return);
+                        should_sleep = true;
                         rstick = true;
                     }
                 } else {
                     if rstick {
+                        enigo.key_up(Key::Return);
+                        should_sleep = true;
                         rstick = false;
                     }
                 }
@@ -275,11 +304,13 @@ fn monitor(joycon: &mut JoyCon) -> Result<()> {
                 if report.buttons.right.x() {
                     if !x {
                         enigo.key_down(Key::Meta);
+                        should_sleep = true;
                         x = true;
                     }
                 } else {
                     if x {
                         enigo.key_up(Key::Meta);
+                        should_sleep = true;
                         x = false;
                     }
                 }
@@ -288,11 +319,13 @@ fn monitor(joycon: &mut JoyCon) -> Result<()> {
                 if report.buttons.right.y() {
                     if !y {
                         enigo.key_down(Key::Shift);
+                        should_sleep = true;
                         y = true;
                     }
                 } else {
                     if y {
                         enigo.key_up(Key::Shift);
+                        should_sleep = true;
                         y = false;
                     }
                 }
@@ -332,6 +365,11 @@ fn monitor(joycon: &mut JoyCon) -> Result<()> {
                         enigo.mouse_up(MouseButton::Left);
                         zl = false;
                     }
+                }
+
+                // キー入力の切れ目でスリープしないと、マシンスペックによって順番が前後してしまう。
+                if should_sleep {
+                    thread::sleep(Duration::from_millis(100));
                 }
             }
         });
