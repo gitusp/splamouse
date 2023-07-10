@@ -1,30 +1,37 @@
 # Splamouse
 
-This is a Pro Controller / Joy-con driver which supports gyro aiming!  
-The mouse cursor behavior is heavily inspired by Splatoon.
+This turns a Pro Controller / Joy-con into a mouse which supports gyro aiming!  
+The behavior is heavily inspired by Splatoon.
 
-| Control | Behavior                                             |
-|---------|------------------------------------------------------|
-| Motion  | Mouse move(like gyro aiming)                         |
-| R-stick | Mouse move                                           |
-| L-stick | Mouse wheel                                          |
-| ZR      | Left click on release                                |
-| R       | Right click on release                               |
-| ZL      | Drag                                                 |
-| A       | Meta + Right arrow(browser forward)                  |
-| B       | Meta + Left arrow(browser back)                      |
-| Y       | Shift                                                |
-| X       | Command                                              |
+| Control        | Behavior                                    |
+|----------------|---------------------------------------------|
+| Motion         | Mouse move(like gyro aiming)                |
+| R-stick        | Mouse move                                  |
+| L-stick        | Mouse wheel                                 |
+| ZR             | Left click on release                       |
+| R              | Right click on release                      |
+| ZL             | Drag                                        |
+| A              | ⌘ + Right arrow(browser forward)            |
+| B              | ⌘ + Left arrow(browser back)                |
+| X              | ⌘                                           |
+| Y              | Shift                                       |
+| Minus          | ⌘ + w(browser tab close)                    |
+| Plus           | ⌘ + t(browser tab open)                     |
+| Left           | Control + Shift + Tab(browser previous tab) |
+| Right          | Control + Tab(browser next tab)             |
+| Down           | ⌘ + c(copy)                                 |
+| Up             | ⌘ + v(paste)                                |
+| R-stick(press) | Enter                                       |
 
 ## How to use
 
 - Connect your controller to your computer via Bluetooth.
 - Download the latest binary from [Releases](https://github.com/gitusp/splamouse/releases).
-    - There's for Apple Silicon(splamouse-macos-apple_silicon.zip) and for x86_64(splamouse-macos-x86_64.zip).
+    - There's for Apple Silicon(splamouse-macos-apple_silicon.zip) and for x86_64(splamouse-macos-x86_64.zip) binaries.
 - Double click the downloaded zip to unarchive.
 - Double click the unarchived binary to open.
-    - A Terminal window may pop up.
     - Allow the program to be opened if a security dialog pops up.
+    - A Terminal window may pop up once allowed.
     - Terminal app may also requests an accessibility permission for mouse operations.
 - Then you can control the cursor with your controller :tada:
 

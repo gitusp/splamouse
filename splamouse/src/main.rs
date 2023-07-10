@@ -108,6 +108,13 @@ fn monitor(joycon: &mut JoyCon) -> Result<()> {
             let mut zr = false;
             let mut r = false;
             let mut zl = false;
+            let mut minus = false;
+            let mut plus = false;
+            let mut left = false;
+            let mut right = false;
+            let mut down = false;
+            let mut up = false;
+            let mut rstick = false;
 
             loop {
                 let report = joycon.tick()?;
@@ -163,6 +170,104 @@ fn monitor(joycon: &mut JoyCon) -> Result<()> {
                 } else {
                     if b {
                         b = false;
+                    }
+                }
+
+                // マイナスボタン押下時
+                if report.buttons.middle.minus() {
+                    if !minus {
+                        enigo.key_down(Key::Meta);
+                        enigo.key_click(Key::Layout('w'));
+                        enigo.key_up(Key::Meta);
+                        minus = true;
+                    }
+                } else {
+                    if minus {
+                        minus = false;
+                    }
+                }
+
+                // プラスボタン押下時
+                if report.buttons.middle.plus() {
+                    if !plus {
+                        enigo.key_down(Key::Meta);
+                        enigo.key_click(Key::Layout('t'));
+                        enigo.key_up(Key::Meta);
+                        plus = true;
+                    }
+                } else {
+                    if plus {
+                        plus = false;
+                    }
+                }
+
+                // 左ボタン押下時
+                if report.buttons.left.left() {
+                    if !left {
+                        enigo.key_down(Key::Control);
+                        enigo.key_down(Key::Shift);
+                        enigo.key_click(Key::Tab);
+                        enigo.key_up(Key::Shift);
+                        enigo.key_up(Key::Control);
+                        left = true;
+                    }
+                } else {
+                    if left {
+                        left = false;
+                    }
+                }
+
+                // 右ボタン押下時
+                if report.buttons.left.right() {
+                    if !right {
+                        enigo.key_down(Key::Control);
+                        enigo.key_click(Key::Tab);
+                        enigo.key_up(Key::Control);
+                        right = true;
+                    }
+                } else {
+                    if right {
+                        right = false;
+                    }
+                }
+
+                // 下ボタン押下時
+                if report.buttons.left.down() {
+                    if !down {
+                        enigo.key_down(Key::Meta);
+                        enigo.key_click(Key::Layout('c'));
+                        enigo.key_up(Key::Meta);
+                        down = true;
+                    }
+                } else {
+                    if down {
+                        down = false;
+                    }
+                }
+
+                // 上ボタン押下時
+                if report.buttons.left.up() {
+                    if !up {
+                        enigo.key_down(Key::Meta);
+                        enigo.key_click(Key::Layout('v'));
+                        enigo.key_up(Key::Meta);
+                        up = true;
+                    }
+                } else {
+                    if up {
+                        up = false;
+                    }
+                }
+
+                // R-stick押下時
+                if report.buttons.middle.rstick() {
+                    if !rstick {
+                        enigo.key_click(Key::Return);
+                        rstick = true;
+                    }
+                } else {
+                    if rstick {
+                        rstick = false;
                     }
                 }
 
