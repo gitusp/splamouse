@@ -7,6 +7,10 @@
 This turns a Pro Controller / Joy-con into a mouse which supports gyro aiming!  
 The behavior is heavily inspired by Splatoon.
 
+https://github.com/gitusp/splamouse/assets/2055516/4228c0da-a27c-4db2-b749-54f1cd394ac9
+
+## Features
+
 | Control        | Behavior                                    |
 |----------------|---------------------------------------------|
 | Motion         | Mouse move(like gyro aiming)                |
