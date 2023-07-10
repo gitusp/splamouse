@@ -76,15 +76,17 @@ fn monitor(joycon: &mut JoyCon) -> Result<()> {
         let _gy = Arc::clone(&gy);
         let _gz = Arc::clone(&gz);
 
-        // スティックの値
-        let sx = Arc::new(Mutex::new(0.0));
-        let sy = Arc::new(Mutex::new(0.0));
-        let _sx = Arc::clone(&sx);
-        let _sy = Arc::clone(&sy);
+        // L-スティックの値
+        let slx = Arc::new(Mutex::new(0.0));
+        let sly = Arc::new(Mutex::new(0.0));
+        let _slx = Arc::clone(&slx);
+        let _sly = Arc::clone(&sly);
 
-        // Rボタン
-        let r = Arc::new(Mutex::new(false));
-        let _r = Arc::clone(&r);
+        // R-スティックの値
+        let srx = Arc::new(Mutex::new(0.0));
+        let sry = Arc::new(Mutex::new(0.0));
+        let _srx = Arc::clone(&srx);
+        let _sry = Arc::clone(&sry);
 
         // コントローラーの姿勢
         let rot = Arc::new(Mutex::new(0.0));
@@ -101,8 +103,11 @@ fn monitor(joycon: &mut JoyCon) -> Result<()> {
             // ボタンの状態
             let mut a = false;
             let mut b = false;
-            let mut drag = false;
+            let mut x = false;
+            let mut y = false;
             let mut zr = false;
+            let mut r = false;
+            let mut zl = false;
 
             loop {
                 let report = joycon.tick()?;
@@ -121,12 +126,17 @@ fn monitor(joycon: &mut JoyCon) -> Result<()> {
                     *rot = (*rot - frame.gyro.x * 0.005) * 0.95 + arot * 0.05;
                 }
 
-                // スティックの値
-                let mut sx = _sx.lock().unwrap();
-                *sx = report.right_stick.x;
+                // L-スティックの値
+                let mut slx = _slx.lock().unwrap();
+                *slx = report.left_stick.x;
+                let mut sly = _sly.lock().unwrap();
+                *sly = report.left_stick.y;
 
-                let mut sy = _sy.lock().unwrap();
-                *sy = report.right_stick.y;
+                // R-スティックの値
+                let mut srx = _srx.lock().unwrap();
+                *srx = report.right_stick.x;
+                let mut sry = _sry.lock().unwrap();
+                *sry = report.right_stick.y;
 
                 // Aボタン押下時
                 if report.buttons.right.a() {
@@ -156,30 +166,66 @@ fn monitor(joycon: &mut JoyCon) -> Result<()> {
                     }
                 }
 
-                // Rボタン押下時
-                let mut r = _r.lock().unwrap();
-                *r = report.buttons.right.r();
+                // Xボタン押下時
+                if report.buttons.right.x() {
+                    if !x {
+                        enigo.key_down(Key::Meta);
+                        x = true;
+                    }
+                } else {
+                    if x {
+                        enigo.key_up(Key::Meta);
+                        x = false;
+                    }
+                }
+
+                // Yボタン押下時
+                if report.buttons.right.y() {
+                    if !y {
+                        enigo.key_down(Key::Shift);
+                        y = true;
+                    }
+                } else {
+                    if y {
+                        enigo.key_up(Key::Shift);
+                        y = false;
+                    }
+                }
 
                 // ZRボタン押下時
                 if report.buttons.right.zr() {
                     if !zr {
-                        if report.buttons.right.y() {
-                            enigo.mouse_down(MouseButton::Left);
-                            drag = true;
-                        }
                         zr = true;
                     }
                 } else {
                     if zr {
-                        if drag {
-                            enigo.mouse_up(MouseButton::Left);
-                            drag = false;
-                        } else {
-                            enigo.mouse_click(
-                                if report.buttons.right.x() { MouseButton::Right } else { MouseButton::Left }
-                            );
-                        }
+                        enigo.mouse_click(MouseButton::Left);
                         zr = false;
+                    }
+                }
+
+                // Rボタン押下時
+                if report.buttons.right.r() {
+                    if !r {
+                        r = true;
+                    }
+                } else {
+                    if r {
+                        enigo.mouse_click(MouseButton::Right);
+                        r = false;
+                    }
+                }
+
+                // ZLボタン押下時
+                if report.buttons.left.zl() {
+                    if !zl {
+                        enigo.mouse_down(MouseButton::Left);
+                        zl = true;
+                    }
+                } else {
+                    if zl {
+                        enigo.mouse_up(MouseButton::Left);
+                        zl = false;
                     }
                 }
             }
@@ -189,15 +235,21 @@ fn monitor(joycon: &mut JoyCon) -> Result<()> {
         s.spawn(move || {
             let mut enigo = Enigo::new();
 
-            // 速度
-            let mut vx = 0.0;
-            let mut vy = 0.0;
+            // ホイール速度
+            let mut vlx = 0.0;
+            let mut vly = 0.0;
 
-            // 端数
-            let mut fx = 0.0;
-            let mut fy = 0.0;
+            // マウス速度
+            let mut vrx = 0.0;
+            let mut vry = 0.0;
 
-            let mut last_r = false;
+            // ホイール端数
+            let mut flx = 0.0;
+            let mut fly = 0.0;
+
+            // マウス端数
+            let mut frx = 0.0;
+            let mut fry = 0.0;
 
             loop {
                 // 割り込み
@@ -205,21 +257,17 @@ fn monitor(joycon: &mut JoyCon) -> Result<()> {
                     break;
                 }
 
-                // Rの押下状態(切替時は速度をリセット)
-                let ur = *r.lock().unwrap();
-                if last_r != ur {
-                    vx = 0.0;
-                    vy = 0.0;
-                    fx = 0.0;
-                    fy = 0.0;
-                    last_r = ur;
-                }
+                // ホイール速度の調整(ドリフト防止のため微量のスティックは無視)
+                let uslx = *slx.lock().unwrap();
+                let usly = *sly.lock().unwrap();
+                vlx = (vlx + (if uslx.abs() < 0.2 { 0.0 } else { uslx }) / 16.0) * 0.9;
+                vly = (vly - (if usly.abs() < 0.2 { 0.0 } else { usly }) / 16.0) * 0.9;
 
-                // 速度の調整(ドリフト防止のため微量のスティックは無視)
-                let usx = *sx.lock().unwrap();
-                let usy = *sy.lock().unwrap();
-                vx = (vx + (if usx.abs() < 0.1 { 0.0 } else { usx }) * 2.0) * 0.9;
-                vy = (vy - (if usy.abs() < 0.1 { 0.0 } else { usy }) * 2.0) * 0.9;
+                // マウス速度の調整(ドリフト防止のため微量のスティックは無視)
+                let usrx = *srx.lock().unwrap();
+                let usry = *sry.lock().unwrap();
+                vrx = (vrx + (if usrx.abs() < 0.2 { 0.0 } else { usrx }) * 2.0) * 0.9;
+                vry = (vry - (if usry.abs() < 0.2 { 0.0 } else { usry }) * 2.0) * 0.9;
 
                 // モーション分
                 let radians = rot.lock().unwrap().to_radians();
@@ -227,27 +275,34 @@ fn monitor(joycon: &mut JoyCon) -> Result<()> {
                 let ugy = *gy.lock().unwrap();
                 let cos = radians.cos();
                 let sin = radians.sin();
-                let mx = (ugz * cos + ugy * sin) / 8.0;
-                let my = (ugz * sin - ugy * cos) / 8.0;
+                let mx = (ugz * cos + ugy * sin) / 6.0;
+                let my = (ugz * sin - ugy * cos) / 6.0;
 
-                // 最終的に動かす量(ドリフト防止のため微量のモーションは無視)
-                let dx = (vx + (if mx.abs() < 0.1 { 0.0 } else { mx })) / (if ur { 12.0 } else { 1.0 }) + fx;
-                let dy = (vy + (if my.abs() < 0.1 { 0.0 } else { my })) / (if ur { 12.0 } else { 1.0 }) + fy;
+                // 最終的なホイール移動量
+                let dlx = vlx + flx;
+                let dly = vly + fly;
+
+                // 最終的なマウス移動量(ドリフト防止のため微量のモーションは無視)
+                let drx = (vrx + (if mx.abs() < 0.2 { 0.0 } else { mx })) + frx;
+                let dry = (vry + (if my.abs() < 0.2 { 0.0 } else { my })) + fry;
 
                 // 端数を持ち越し
-                let rdx = dx.round();
-                let rdy = dy.round();
-                fx = dx - rdx;
-                fy = dy - rdy;
+                let rdlx = dlx.round();
+                let rdly = dly.round();
+                flx = dlx - rdlx;
+                fly = dly - rdly;
 
-                if ur {
-                    // R押下中はホイール扱い
-                    enigo.mouse_scroll_x(rdx as i32);
-                    enigo.mouse_scroll_y(rdy as i32);
-                } else {
-                    // マウス移動
-                    enigo.mouse_move_relative(rdx as i32, rdy as i32);
-                }
+                let rdrx = drx.round();
+                let rdry = dry.round();
+                frx = drx - rdrx;
+                fry = dry - rdry;
+
+                // ホイール
+                enigo.mouse_scroll_x(rdlx as i32);
+                enigo.mouse_scroll_y(rdly as i32);
+
+                // マウス移動
+                enigo.mouse_move_relative(rdrx as i32, rdry as i32);
 
                 // 5ms毎に実行
                 thread::sleep(Duration::from_millis(5));
