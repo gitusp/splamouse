@@ -15,13 +15,6 @@ The behavior is heavily inspired by Splatoon.
 | B              | ⌘ + Left arrow(browser back)                |
 | X              | ⌘                                           |
 | Y              | Shift                                       |
-| Minus          | ⌘ + w(browser tab close)                    |
-| Plus           | ⌘ + t(browser tab open)                     |
-| Left           | Control + Shift + Tab(browser previous tab) |
-| Right          | Control + Tab(browser next tab)             |
-| Down           | ⌘ + c(copy)                                 |
-| Up             | ⌘ + v(paste)                                |
-| R-stick(press) | Enter                                       |
 
 ## How to use
 
