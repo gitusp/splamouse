@@ -12,6 +12,7 @@ use joycon_sys::{input::*, light};
 use tracing::{field::debug, instrument, trace, Span};
 
 const WAIT_TIMEOUT: u32 = 200;
+const WAIT_TIMEOUT_SUBCMD: u32 = 10;
 
 #[derive(Debug, Clone)]
 pub struct Report {
@@ -202,7 +203,7 @@ impl JoyCon {
         let mut out_report = subcmd.into();
 
         self.send(&mut out_report)?;
-        for _ in 0..WAIT_TIMEOUT {
+        for _ in 0..WAIT_TIMEOUT_SUBCMD {
             let in_report = self.recv()?;
             if let Some(reply) = in_report.subcmd_reply() {
                 if reply.id() == subcmd.id() {
