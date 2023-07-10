@@ -33,10 +33,10 @@ The behavior is heavily inspired by Splatoon.
 - Download the latest binary from [Releases](https://github.com/gitusp/splamouse/releases).
     - There's for Apple Silicon(splamouse-macos-apple_silicon.zip) and for x86_64(splamouse-macos-x86_64.zip) binaries.
 - Double click the downloaded zip to unarchive.
-- Double click the unarchived binary to open.
-    - Allow the program to be opened if a security dialog pops up.
+- Open the unarchived binary **from a context menu** by clicking it with the right mouse button.
+    - A security dialog may pop up, allow the program to be opened.
     - A Terminal window should pop up once allowed.
-    - Terminal app may also requests an accessibility permission for mouse operations.
+    - Terminal app should request an accessibility permission for mouse operations, allow it.
 - Then you can control the cursor with your controller. :tada:
 
 ## Tips
