@@ -1,3 +1,7 @@
+<h3 align="center">
+  English | <a href="https://github.com/gitusp/splamouse/blob/master/splamouse/README-ja.md">日本語</a>
+</h3>
+
 # Splamouse
 
 This turns a Pro Controller / Joy-con into a mouse which supports gyro aiming!  
@@ -31,9 +35,9 @@ The behavior is heavily inspired by Splatoon.
 - Double click the downloaded zip to unarchive.
 - Double click the unarchived binary to open.
     - Allow the program to be opened if a security dialog pops up.
-    - A Terminal window may pop up once allowed.
+    - A Terminal window should pop up once allowed.
     - Terminal app may also requests an accessibility permission for mouse operations.
-- Then you can control the cursor with your controller :tada:
+- Then you can control the cursor with your controller. :tada:
 
 ## Tips
 
