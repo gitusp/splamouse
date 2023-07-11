@@ -105,15 +105,19 @@ fn monitor(joycon: &mut JoyCon) -> Result<()> {
             let mut b = false;
             let mut x = false;
             let mut y = false;
-            let mut zr = false;
+            let mut l = false;
             let mut r = false;
             let mut zl = false;
+            let mut zr = false;
             let mut minus = false;
             let mut plus = false;
             let mut left = false;
             let mut right = false;
             let mut down = false;
             let mut up = false;
+            let mut capture = false;
+            let mut home = false;
+            let mut lstick = false;
             let mut rstick = false;
 
             loop {
@@ -285,6 +289,55 @@ fn monitor(joycon: &mut JoyCon) -> Result<()> {
                     }
                 }
 
+                // ホーム押下時
+                if report.buttons.middle.home() {
+                    if !home {
+                        enigo.key_down(Key::Meta);
+                        enigo.key_down(Key::Shift);
+                        enigo.key_down(Key::Raw(0x06));
+                        should_sleep = true;
+                        home = true;
+                    }
+                } else {
+                    if home {
+                        enigo.key_up(Key::Raw(0x06));
+                        enigo.key_up(Key::Shift);
+                        enigo.key_up(Key::Meta);
+                        should_sleep = true;
+                        home = false;
+                    }
+                }
+
+                // 撮影ボタン押下時
+                if report.buttons.middle.capture() {
+                    if !capture {
+                        enigo.key_down(Key::Meta);
+                        enigo.key_down(Key::Raw(0x06));
+                        should_sleep = true;
+                        capture = true;
+                    }
+                } else {
+                    if capture {
+                        enigo.key_up(Key::Raw(0x06));
+                        enigo.key_up(Key::Meta);
+                        should_sleep = true;
+                        capture = false;
+                    }
+                }
+
+                // L-stick押下時
+                if report.buttons.middle.lstick() {
+                    if !lstick {
+                        enigo.mouse_down(MouseButton::Middle);
+                        lstick = true;
+                    }
+                } else {
+                    if lstick {
+                        enigo.mouse_up(MouseButton::Middle);
+                        lstick = false;
+                    }
+                }
+
                 // R-stick押下時
                 if report.buttons.middle.rstick() {
                     if !rstick {
@@ -339,6 +392,23 @@ fn monitor(joycon: &mut JoyCon) -> Result<()> {
                     if zr {
                         enigo.mouse_click(MouseButton::Left);
                         zr = false;
+                    }
+                }
+
+                // Lボタン押下時
+                if report.buttons.left.l() {
+                    if !l {
+                        enigo.key_down(Key::Meta);
+                        enigo.key_down(Key::Raw(0x0F));
+                        should_sleep = true;
+                        l = true;
+                    }
+                } else {
+                    if l {
+                        enigo.key_up(Key::Raw(0x0F));
+                        enigo.key_up(Key::Meta);
+                        should_sleep = true;
+                        l = false;
                     }
                 }
 

@@ -14,10 +14,11 @@ https://github.com/gitusp/splamouse/assets/2055516/4228c0da-a27c-4db2-b749-54f1c
 | Control        | Behavior                                    |
 |----------------|---------------------------------------------|
 | Motion         | Mouse move(like gyro aiming)                |
-| R-stick        | Mouse move                                  |
 | L-stick        | Mouse wheel                                 |
-| ZR             | Left click on release                       |
+| R-stick        | Mouse move                                  |
+| L              | ⌘ + R(browser reload)                       |
 | R              | Right click on release                      |
+| ZR             | Left click on release                       |
 | ZL             | Drag                                        |
 | A              | ⌘ + Right arrow(browser forward)            |
 | B              | ⌘ + Left arrow(browser back)                |
@@ -29,7 +30,10 @@ https://github.com/gitusp/splamouse/assets/2055516/4228c0da-a27c-4db2-b749-54f1c
 | Right          | Control + Tab(browser next tab)             |
 | Down           | ⌘ + c(copy)                                 |
 | Up             | ⌘ + v(paste)                                |
+| L-stick(press) | Middle click                                |
 | R-stick(press) | Enter                                       |
+| Capture        | ⌘ + z(undo)                                 |
+| Home           | ⌘ + Shift + z(redo)                         |
 
 ## How to use
 
