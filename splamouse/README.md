@@ -46,6 +46,6 @@ https://github.com/gitusp/splamouse/assets/2055516/4228c0da-a27c-4db2-b749-54f1c
 ## Tips
 
 - Your controller may lose connection when there's no interaction for a while.
-- If your controller is connected to your computer properly, but the cursor is not moving, try wiggling your stick.
+    - Try pushing buttons and wiggling sticks to reconnect.
 - Reconnect your controller and restart this program if the connection problem still remains.
     - It is more reliable to delete the device once when reconnecting.
