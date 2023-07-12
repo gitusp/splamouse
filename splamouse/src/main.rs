@@ -496,8 +496,8 @@ fn monitor(joycon: &mut JoyCon) -> Result<()> {
                 let dly = vly + fly;
 
                 // 最終的なマウス移動量(ドリフト防止のため微量のモーションは無視)
-                let drx = (vrx + (if mx.abs() < 0.2 { 0.0 } else { mx })) + frx;
-                let dry = (vry + (if my.abs() < 0.2 { 0.0 } else { my })) + fry;
+                let drx = (vrx + (if mx.abs() < 0.4 { 0.0 } else { mx })) + frx;
+                let dry = (vry + (if my.abs() < 0.4 { 0.0 } else { my })) + fry;
 
                 // 端数を持ち越し
                 let rdlx = dlx.round();
