@@ -2004,11 +2004,12 @@ dependencies = [
 
 [[package]]
 name = "splamouse"
-version = "1.1.1"
+version = "1.2.0"
 dependencies = [
  "anyhow",
  "bluetooth-sys",
  "cgmath",
+ "clap 3.1.0",
  "enigo",
  "joycon",
  "libc",

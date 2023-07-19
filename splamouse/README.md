@@ -47,6 +47,15 @@ https://github.com/gitusp/splamouse/assets/2055516/4228c0da-a27c-4db2-b749-54f1c
     - Terminal app should request an accessibility permission for mouse operations, allow it.
 - Then you can control the cursor with your controller. :tada:
 
+### Options
+
+Launching this app directly from the terminal, you can set the sensitivity by specifying the following arguments.  
+(Values should be between -5.0 and 5.0. If nothing is specified, 0.0 will be used.)
+
+```sh
+splamouse --gyro=-3.0 --stick=4.5
+```
+
 ## Tips
 
 - Your controller may lose connection when there's no interaction for a while.

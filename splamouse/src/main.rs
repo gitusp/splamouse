@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use clap::Parser;
 use enigo::*;
 use joycon::{
     hidapi::HidApi,
@@ -15,7 +16,26 @@ use std::{
     thread,
 };
 
+#[derive(Parser)]
+struct Opts {
+    #[clap(short, long, default_value="0.0")]
+    pub gyro: f64,
+    #[clap(short, long, default_value="0.0")]
+    pub stick: f64,
+}
+
 fn main() -> Result<()> {
+    let opts = Opts::parse();
+
+    if opts.gyro.abs() > 5.0 || opts.stick.abs() > 5.0 {
+        eprintln!("gyro and stick must be between -5.0 and 5.0");
+        return Ok(());
+    }
+
+    // 感度計算
+    let gyro = 2.0 + opts.gyro * 0.2;
+    let stick = 2.0 + opts.stick * 0.2;
+
     let mut api = HidApi::new()?;
     loop {
         api.refresh_devices()?;
@@ -30,7 +50,7 @@ fn main() -> Result<()> {
             // NOTE: 接続が中途半端な際、ここでよくパニックする。
             let _ = std::panic::catch_unwind(|| -> Result<()> {
                 let joycon = JoyCon::new(device, device_info.clone())?;
-                hid_main(joycon).context("error running the command")?;
+                hid_main(joycon, gyro, stick).context("error running the command")?;
                 Ok(())
             });
         } else {
@@ -40,7 +60,7 @@ fn main() -> Result<()> {
     }
 }
 
-fn hid_main(mut joycon: JoyCon) -> Result<()> {
+fn hid_main(mut joycon: JoyCon, gyro: f64, stick: f64) -> Result<()> {
     joycon.set_home_light(light::HomeLight::new(
         0x8,
         0x2,
@@ -61,11 +81,11 @@ fn hid_main(mut joycon: JoyCon) -> Result<()> {
         },
     ))?;
 
-    monitor(&mut joycon)?;
+    monitor(&mut joycon, gyro, stick)?;
     Ok(())
 }
 
-fn monitor(joycon: &mut JoyCon) -> Result<()> {
+fn monitor(joycon: &mut JoyCon, gyro: f64, stick: f64) -> Result<()> {
     joycon.enable_imu()?;
     joycon.load_calibration()?;
 
@@ -473,31 +493,34 @@ fn monitor(joycon: &mut JoyCon) -> Result<()> {
                 // ホイール速度の調整(ドリフト防止のため微量のスティックは無視)
                 let uslx = *slx.lock().unwrap();
                 let usly = *sly.lock().unwrap();
-                vlx = (vlx + (if uslx.abs() < 0.2 { 0.0 } else { uslx }) / 16.0) * 0.9;
-                vly = (vly - (if usly.abs() < 0.2 { 0.0 } else { usly }) / 16.0) * 0.9;
+                vlx = (vlx + (if uslx.abs() < 0.2 { 0.0 } else { uslx }) * stick / 16.0) * 0.9;
+                vly = (vly - (if usly.abs() < 0.2 { 0.0 } else { usly }) * stick / 16.0) * 0.9;
 
                 // マウス速度の調整(ドリフト防止のため微量のスティックは無視)
                 let usrx = *srx.lock().unwrap();
                 let usry = *sry.lock().unwrap();
-                vrx = (vrx + (if usrx.abs() < 0.2 { 0.0 } else { usrx }) * 2.0) * 0.9;
-                vry = (vry - (if usry.abs() < 0.2 { 0.0 } else { usry }) * 2.0) * 0.9;
+                vrx = (vrx + (if usrx.abs() < 0.2 { 0.0 } else { usrx }) * stick * 2.0) * 0.9;
+                vry = (vry - (if usry.abs() < 0.2 { 0.0 } else { usry }) * stick * 2.0) * 0.9;
 
                 // モーション分
                 let radians = rot.lock().unwrap().to_radians();
                 let ugz = *gz.lock().unwrap();
                 let ugy = *gy.lock().unwrap();
+                // ドリフト防止のため微量のモーションは無視
+                let nugz = if ugz.abs() < 2.0 { 0.0 } else { ugz };
+                let nugy = if ugy.abs() < 2.0 { 0.0 } else { ugy };
                 let cos = radians.cos();
                 let sin = radians.sin();
-                let mx = (ugz * cos + ugy * sin) / 6.0;
-                let my = (ugz * sin - ugy * cos) / 6.0;
+                let mx = (nugz * cos + nugy * sin) * gyro / 8.0;
+                let my = (nugz * sin - nugy * cos) * gyro / 8.0;
 
                 // 最終的なホイール移動量
                 let dlx = vlx + flx;
                 let dly = vly + fly;
 
-                // 最終的なマウス移動量(ドリフト防止のため微量のモーションは無視)
-                let drx = (vrx + (if mx.abs() < 0.4 { 0.0 } else { mx })) + frx;
-                let dry = (vry + (if my.abs() < 0.4 { 0.0 } else { my })) + fry;
+                // 最終的なマウス移動量
+                let drx = vrx + mx + frx;
+                let dry = vry + my + fry;
 
                 // 端数を持ち越し
                 let rdlx = dlx.round();
