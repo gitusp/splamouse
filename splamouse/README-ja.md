@@ -25,7 +25,7 @@ https://github.com/gitusp/splamouse/assets/2055516/c113f2e3-12b8-4624-8700-a07d4
 | X                    | ⌘                                 |
 | Y                    | Shift                             |
 | マイナス             | ⌘ + w（ブラウザのタブを閉じる）   |
-| プラス               | ⌘ + t（ブラウザのタブを開く）     |
+| プラス               | Alt                               |
 | 左                   | Control + Shift + Tab（前のタブ） |
 | 右                   | Control + Tab（次のタブ）         |
 | 下                   | ⌘ + c（コピー）                   |

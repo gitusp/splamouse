@@ -25,7 +25,7 @@ https://github.com/gitusp/splamouse/assets/2055516/4228c0da-a27c-4db2-b749-54f1c
 | X              | ⌘                                           |
 | Y              | Shift                                       |
 | Minus          | ⌘ + w(browser tab close)                    |
-| Plus           | ⌘ + t(browser tab open)                     |
+| Plus           | Alt                                         |
 | Left           | Control + Shift + Tab(browser previous tab) |
 | Right          | Control + Tab(browser next tab)             |
 | Down           | ⌘ + c(copy)                                 |
