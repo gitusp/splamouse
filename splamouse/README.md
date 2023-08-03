@@ -16,7 +16,7 @@ https://github.com/gitusp/splamouse/assets/2055516/4228c0da-a27c-4db2-b749-54f1c
 | Motion         | Mouse move(like gyro aiming)                |
 | L-stick        | Mouse wheel                                 |
 | R-stick        | Mouse move                                  |
-| L              | ⌘ + R(browser reload)                       |
+| L              | Alt                                         |
 | R              | Right click on release                      |
 | ZR             | Left click on release                       |
 | ZL             | Drag                                        |
@@ -25,7 +25,7 @@ https://github.com/gitusp/splamouse/assets/2055516/4228c0da-a27c-4db2-b749-54f1c
 | X              | ⌘                                           |
 | Y              | Shift                                       |
 | Minus          | ⌘ + w(browser tab close)                    |
-| Plus           | Alt                                         |
+| Plus           | ⌘ + R(browser reload)                       |
 | Left           | Control + Shift + Tab(browser previous tab) |
 | Right          | Control + Tab(browser next tab)             |
 | Down           | ⌘ + c(copy)                                 |

@@ -16,7 +16,7 @@ https://github.com/gitusp/splamouse/assets/2055516/c113f2e3-12b8-4624-8700-a07d4
 | モーション           | マウス移動（ジャイロエイム）      |
 | L-スティック         | マウスホイール                    |
 | R-スティック         | マウス移動                        |
-| L                    | ⌘ + R(ブラウザのリロード)         |
+| L                    | Alt                               |
 | R                    | 離した時に右クリック              |
 | ZL                   | ドラッグ                          |
 | ZR                   | 離した時に左クリック              |
@@ -25,7 +25,7 @@ https://github.com/gitusp/splamouse/assets/2055516/c113f2e3-12b8-4624-8700-a07d4
 | X                    | ⌘                                 |
 | Y                    | Shift                             |
 | マイナス             | ⌘ + w（ブラウザのタブを閉じる）   |
-| プラス               | Alt                               |
+| プラス               | ⌘ + R(ブラウザのリロード)         |
 | 左                   | Control + Shift + Tab（前のタブ） |
 | 右                   | Control + Tab（次のタブ）         |
 | 下                   | ⌘ + c（コピー）                   |

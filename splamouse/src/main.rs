@@ -225,13 +225,15 @@ fn monitor(joycon: &mut JoyCon, gyro: f64, stick: f64) -> Result<()> {
                 // プラスボタン押下時
                 if report.buttons.middle.plus() {
                     if !plus {
-                        enigo.key_down(Key::Alt);
+                        enigo.key_down(Key::Meta);
+                        enigo.key_down(Key::Raw(0x0F));
                         should_sleep = true;
                         plus = true;
                     }
                 } else {
                     if plus {
-                        enigo.key_up(Key::Alt);
+                        enigo.key_up(Key::Raw(0x0F));
+                        enigo.key_up(Key::Meta);
                         should_sleep = true;
                         plus = false;
                     }
@@ -416,15 +418,13 @@ fn monitor(joycon: &mut JoyCon, gyro: f64, stick: f64) -> Result<()> {
                 // Lボタン押下時
                 if report.buttons.left.l() {
                     if !l {
-                        enigo.key_down(Key::Meta);
-                        enigo.key_down(Key::Raw(0x0F));
+                        enigo.key_down(Key::Alt);
                         should_sleep = true;
                         l = true;
                     }
                 } else {
                     if l {
-                        enigo.key_up(Key::Raw(0x0F));
-                        enigo.key_up(Key::Meta);
+                        enigo.key_up(Key::Alt);
                         should_sleep = true;
                         l = false;
                     }
