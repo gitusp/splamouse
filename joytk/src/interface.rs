@@ -121,7 +121,7 @@ fn render_device(menu_state: &ListState) -> (List, Table) {
 }
 
 fn start_input_loop(tx: Sender<Event>) {
-    let tick_rate = Duration::from_millis(200);
+    let tick_rate = Duration::from_millis(15);
     std::thread::spawn(move || {
         let mut last_tick = Instant::now();
         loop {

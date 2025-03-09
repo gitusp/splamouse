@@ -12,7 +12,7 @@ use joycon::{
 };
 use std::sync::{Mutex, Arc};
 use std::{
-    time::Duration,
+    time::{Duration, Instant},
     thread,
 };
 
@@ -482,10 +482,17 @@ fn monitor(joycon: &mut JoyCon, gyro: f64, stick: f64) -> Result<()> {
             let mut frx = 0.0;
             let mut fry = 0.0;
 
+            let tick_rate = Duration::from_millis(8);
+            let mut last_tick = Instant::now();
+
             loop {
                 // 割り込み
                 if *_interrupt.lock().unwrap() {
                     break;
+                }
+
+                if last_tick.elapsed() < tick_rate {
+                    continue;
                 }
 
                 // ホイール速度の調整(ドリフト防止のため微量のスティックは無視)
@@ -538,8 +545,7 @@ fn monitor(joycon: &mut JoyCon, gyro: f64, stick: f64) -> Result<()> {
                 // マウス移動
                 enigo.mouse_move_relative(rdrx as i32, rdry as i32);
 
-                // 5ms毎に実行
-                thread::sleep(Duration::from_millis(5));
+                last_tick = Instant::now();
             }
         });
 
