@@ -1,3 +1,6 @@
+:warning: After Sonoma, Pro Controller has input lag.  
+Currently, I'm investigating the issue.
+
 # joy
 
 Suite of tools and libraries for interactions with Nintendo Switch and DualShock 4 controllers.
