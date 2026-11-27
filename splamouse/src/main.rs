@@ -1,5 +1,7 @@
+mod launch_agent;
+
 use anyhow::{Context, Result};
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use enigo::{
     Axis, Button, Coordinate,
     Direction::{Click, Press, Release},
@@ -101,10 +103,20 @@ const BINDINGS: [(IsPressed, Action); 18] = {
 
 #[derive(Parser)]
 struct Opts {
-    #[arg(short, long, default_value = "0.0")]
+    #[arg(short, long, default_value = "0.0", global = true)]
     gyro: f64,
-    #[arg(short, long, default_value = "0.0")]
+    #[arg(short, long, default_value = "0.0", global = true)]
     stick: f64,
+    #[command(subcommand)]
+    command: Option<Command>,
+}
+
+#[derive(Subcommand)]
+enum Command {
+    /// Run splamouse in the background now and at every login
+    Install,
+    /// Stop running splamouse in the background
+    Uninstall,
 }
 
 /// 感度の倍率。
@@ -269,6 +281,12 @@ fn main() -> Result<()> {
         eprintln!("gyro and stick must be between -5.0 and 5.0");
         return Ok(());
     };
+
+    match opts.command {
+        Some(Command::Install) => return launch_agent::install(opts.gyro, opts.stick),
+        Some(Command::Uninstall) => return launch_agent::uninstall(),
+        None => {}
+    }
 
     // ⌘+クリックや ⌘+スクロールが効くよう、ボタンとマウスの両スレッドで1つの Enigo を共有して修飾キーの状態を揃える。
     // Enigo は drop 時に送ったイベント数に比例してスリープする(5ms 毎のマウス移動だと 1 時間で約 3 時間)ので、

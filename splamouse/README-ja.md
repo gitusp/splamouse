@@ -60,6 +60,23 @@ https://github.com/gitusp/splamouse/assets/2055516/c113f2e3-12b8-4624-8700-a07d4
 splamouse --gyro=-3.0 --stick=4.5
 ```
 
+### ログイン時に自動で起動する
+
+コントローラーが繋がっていない間も含めて、splamouseをバックグラウンドで動かし続けられます。ターミナルから以下のように登録してください(感度のオプションは省略できます)。
+
+```sh
+splamouse install --gyro=-3.0 --stick=4.5
+```
+
+- すぐに起動し、以降はログインするたびに起動します。コントローラーを接続すると自動で繋がります。
+- ターミナルアプリではなくsplamouse自身にアクセシビリティの許可が求められるので、許可してください。
+- 同時にターミナルからsplamouseを起動しないでください。
+- 実行ファイルは`install`したときの場所に置いたままにしてください。移動・更新したら、もう一度`splamouse install`を実行してください。
+    - 更新後は以前のアクセシビリティの許可が効かなくなることがあります。カーソルが動かない場合は、一覧から「−」でsplamouseを削除してから許可し直してください。
+- ログは`~/Library/Logs/splamouse.log`に出力されます。
+- 再起動するには: `launchctl kickstart -k gui/$(id -u)/com.github.gitusp.splamouse`
+- 停止するには: `splamouse uninstall`
+
 ## Tips
 
 - 起動時に、USBとBluetoothのどちらで接続したかが表示されます。
