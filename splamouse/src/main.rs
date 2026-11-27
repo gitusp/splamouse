@@ -7,7 +7,7 @@ use enigo::{
 };
 use joycon::{
     IMU, JoyCon,
-    hidapi::{BusType, DeviceInfo, HidApi},
+    hidapi::{BusType, DeviceInfo, HidApi, HidDevice},
     joycon_sys::{
         JOYCON_L_BT, JOYCON_R_BT, NINTENDO_VENDOR_ID, PRO_CONTROLLER,
         input::{BatteryLevel, ButtonsStatus},
@@ -277,16 +277,14 @@ fn main() -> Result<()> {
 
     let mut api = HidApi::new()?;
     loop {
-        api.refresh_devices()?;
-        let Some(device_info) = find_controller(&api) else {
-            eprintln!("No device found");
-            thread::sleep(RETRY_INTERVAL);
-            continue;
+        let (device, device_info) = match open_controller(&mut api) {
+            Ok(found) => found,
+            Err(e) => {
+                eprintln!("{e:#}");
+                thread::sleep(RETRY_INTERVAL);
+                continue;
+            }
         };
-        let device = device_info
-            .open_device(&api)
-            .with_context(|| format!("error opening the HID device {device_info:?}"))?;
-        let device_info = device_info.clone();
 
         // NOTE: 接続が中途半端な際、よくパニックする。
         // パニックやエラーの後は device を捨てて再接続するだけなので、結果は捨て、AssertUnwindSafe でも問題ない。
@@ -328,11 +326,22 @@ fn new_enigo() -> Result<Enigo> {
     }
 }
 
-/// 接続されているコントローラーを探す。USB と Bluetooth の両方で見えている場合は USB を優先する。
-fn find_controller(api: &HidApi) -> Option<&DeviceInfo> {
-    api.device_list()
+/// 接続されているコントローラーを開く。USB と Bluetooth の両方で見えている場合は USB を優先する。
+fn open_controller(api: &mut HidApi) -> Result<(HidDevice, DeviceInfo)> {
+    api.refresh_devices()
+        .context("Failed to list the HID devices")?;
+    let info = api
+        .device_list()
         .filter(|x| x.vendor_id() == NINTENDO_VENDOR_ID && PRODUCT_IDS.contains(&x.product_id()))
         .min_by_key(|x| !matches!(x.bus_type(), BusType::Usb))
+        .context("No device found")?;
+    let device = info.open_device(api).with_context(|| {
+        format!(
+            "Failed to open {}",
+            info.product_string().unwrap_or("the controller")
+        )
+    })?;
+    Ok((device, info.clone()))
 }
 
 /// ロックを取る。他のスレッドがパニックしても中身は使い続けられるので、ポイズンは無視する。
