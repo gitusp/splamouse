@@ -1,5 +1,6 @@
 //! ログイン時に splamouse をバックグラウンドで起動する LaunchAgent の登録と解除。
 
+use crate::config;
 use anyhow::{Context, Result, ensure};
 use std::{
     env,
@@ -11,7 +12,16 @@ use std::{
 
 const LABEL: &str = "com.github.gitusp.splamouse";
 
-pub fn install(gyro: f64, stick: f64) -> Result<()> {
+pub fn install() -> Result<()> {
+    // 誤った設定のまま常駐させないよう、先に読めるか確かめる。
+    config::load()?;
+    // launchd から起動するとシェルの環境変数は引き継がれないので、同じ設定ファイルを読むよう渡す。
+    let config_home = config::xdg_config_home();
+    let config_home = config_home
+        .as_deref()
+        .map(|dir| dir.to_str().context("XDG_CONFIG_HOME isn't valid UTF-8"))
+        .transpose()?;
+
     let exe = env::current_exe()
         .and_then(|path| path.canonicalize())
         .context("error locating the splamouse binary")?;
@@ -26,7 +36,7 @@ pub fn install(gyro: f64, stick: f64) -> Result<()> {
         .context("the path to the log file isn't valid UTF-8")?;
 
     fs::create_dir_all(plist.parent().unwrap()).context("error creating ~/Library/LaunchAgents")?;
-    fs::write(&plist, render_plist(exe, gyro, stick, log))
+    fs::write(&plist, render_plist(exe, config_home, log))
         .with_context(|| format!("error writing {}", plist.display()))?;
 
     // 登録済みなら、新しい設定で起動し直すために一度外す。
@@ -44,6 +54,13 @@ pub fn install(gyro: f64, stick: f64) -> Result<()> {
     );
     println!("- Keep the binary where it is: {exe}");
     println!("  Run `splamouse install` again after moving or updating it.");
+    if let Some(path) = config::path() {
+        println!("- Config: {}", path.display());
+        println!(
+            "  Restart splamouse after editing it: launchctl kickstart -k {}",
+            service_target()
+        );
+    }
     println!("- Logs: {log}");
     println!("- To stop it: splamouse uninstall");
     Ok(())
@@ -109,9 +126,17 @@ fn launchctl<S: AsRef<OsStr>>(args: impl IntoIterator<Item = S>) -> Result<()> {
     Ok(())
 }
 
-fn render_plist(exe: &str, gyro: f64, stick: f64, log: &str) -> String {
+fn render_plist(exe: &str, config_home: Option<&str>, log: &str) -> String {
     let exe = xml_escape(exe);
     let log = xml_escape(log);
+    let environment = config_home
+        .map(|dir| {
+            format!(
+                "\t<key>EnvironmentVariables</key>\n\t<dict>\n\t\t<key>XDG_CONFIG_HOME</key>\n\t\t<string>{}</string>\n\t</dict>\n",
+                xml_escape(dir)
+            )
+        })
+        .unwrap_or_default();
     // RunAtLoad + KeepAlive: ログイン時に起動し、落ちても起動し直す。
     // ProcessType Interactive: バックグラウンド扱いで間引かれて、マウス操作が遅れないようにする。
     format!(
@@ -124,10 +149,8 @@ fn render_plist(exe: &str, gyro: f64, stick: f64, log: &str) -> String {
 	<key>ProgramArguments</key>
 	<array>
 		<string>{exe}</string>
-		<string>--gyro={gyro}</string>
-		<string>--stick={stick}</string>
 	</array>
-	<key>RunAtLoad</key>
+{environment}	<key>RunAtLoad</key>
 	<true/>
 	<key>KeepAlive</key>
 	<true/>
@@ -154,10 +177,17 @@ mod tests {
     use super::*;
 
     #[test]
-    fn plist_escapes_paths_and_keeps_sensitivity() {
-        let plist = render_plist("/Users/a&b/<splamouse>", -3.0, 4.5, "/tmp/log");
+    fn plist_escapes_paths() {
+        let plist = render_plist("/Users/a&b/<splamouse>", None, "/tmp/log");
         assert!(plist.contains("<string>/Users/a&amp;b/&lt;splamouse&gt;</string>"));
-        assert!(plist.contains("<string>--gyro=-3</string>"));
-        assert!(plist.contains("<string>--stick=4.5</string>"));
+        assert!(!plist.contains("EnvironmentVariables"));
+    }
+
+    #[test]
+    fn plist_passes_xdg_config_home() {
+        let plist = render_plist("/bin/splamouse", Some("/Users/a&b/.conf"), "/tmp/log");
+        assert!(plist.contains(
+            "\t<key>EnvironmentVariables</key>\n\t<dict>\n\t\t<key>XDG_CONFIG_HOME</key>\n\t\t<string>/Users/a&amp;b/.conf</string>\n\t</dict>\n\t<key>RunAtLoad</key>"
+        ));
     }
 }

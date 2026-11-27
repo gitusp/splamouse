@@ -1,11 +1,13 @@
+mod config;
 mod launch_agent;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
+use config::{Action, Buttons, Sensitivity};
 use enigo::{
-    Axis, Button, Coordinate,
+    Axis, Coordinate,
     Direction::{Click, Press, Release},
-    Enigo, InputResult, Key, Keyboard, Mouse, NewConError, Settings,
+    Enigo, InputResult, Keyboard, Mouse, NewConError, Settings,
 };
 use joycon::{
     IMU, JoyCon,
@@ -43,71 +45,40 @@ const STICK_DEADZONE: f64 = 0.2;
 /// ドリフト防止のため、これより小さいモーション(角速度)は無視する。
 const GYRO_DEADZONE: f64 = 2.0;
 
-// 配列によらず同じ位置のキーを押すよう、文字ではなく仮想キーコード(kVK_ANSI_*)で指定する。
-const KEY_C: Key = Key::Other(0x08);
-const KEY_R: Key = Key::Other(0x0F);
-const KEY_V: Key = Key::Other(0x09);
-const KEY_W: Key = Key::Other(0x0D);
-const KEY_Z: Key = Key::Other(0x06);
-
-/// ボタンに割り当てる操作。
-#[derive(Clone, Copy)]
-enum Action {
-    /// 押している間キーを押す。離すときは押したのと逆順に離す。
-    Keys(&'static [Key]),
-    /// 押している間マウスボタンを押す。
-    Hold(Button),
-    /// 離したときにクリックする。
-    ClickOnRelease(Button),
-}
-
-impl Action {
-    /// 押している間、`key` を押したままにするか。
-    fn holds_key(self, key: Key) -> bool {
-        matches!(self, Self::Keys(keys) if keys.contains(&key))
-    }
-
-    /// 押している間、`button` を押したままにするか。
-    fn holds_button(self, button: Button) -> bool {
-        matches!(self, Self::Hold(held) if held == button)
-    }
-}
+/// ポインタを画面中央へ戻すアニメーションの長さ(MOUSE_INTERVAL × 40 = 200ms)。
+const GLIDE_STEPS: u32 = 40;
 
 /// ボタンが押されているか。
 type IsPressed = fn(&ButtonsStatus) -> bool;
 
-/// ボタンと操作の対応。同時に変化したボタンはこの順に送る。
-#[rustfmt::skip]
-const BINDINGS: [(IsPressed, Action); 18] = {
-    use Action::{ClickOnRelease, Hold, Keys};
+const BUTTON_COUNT: usize = 18;
+
+/// ボタンと、設定で割り当てた操作の対応。同時に変化したボタンはこの順に送る。
+fn bindings(buttons: &Buttons) -> [(IsPressed, &Action); BUTTON_COUNT] {
     [
-        (|b| b.right.a(), Keys(&[Key::Meta, Key::RightArrow])),
-        (|b| b.right.b(), Keys(&[Key::Meta, Key::LeftArrow])),
-        (|b| b.middle.minus(), Keys(&[Key::Meta, KEY_W])),
-        (|b| b.middle.plus(), Keys(&[Key::Meta, KEY_R])),
-        (|b| b.left.left(), Keys(&[Key::Control, Key::Shift, Key::Tab])),
-        (|b| b.left.right(), Keys(&[Key::Control, Key::Tab])),
-        (|b| b.left.down(), Keys(&[Key::Meta, KEY_C])),
-        (|b| b.left.up(), Keys(&[Key::Meta, KEY_V])),
-        (|b| b.middle.home(), Keys(&[Key::Meta, Key::Shift, KEY_Z])),
-        (|b| b.middle.capture(), Keys(&[Key::Meta, KEY_Z])),
-        (|b| b.middle.lstick(), Hold(Button::Middle)),
-        (|b| b.middle.rstick(), Keys(&[Key::Return])),
-        (|b| b.right.x(), Keys(&[Key::Meta])),
-        (|b| b.right.y(), Keys(&[Key::Shift])),
-        (|b| b.right.zr(), ClickOnRelease(Button::Left)),
-        (|b| b.left.l(), Keys(&[Key::Alt])),
-        (|b| b.right.r(), ClickOnRelease(Button::Right)),
-        (|b| b.left.zl(), Hold(Button::Left)),
+        (|b| b.right.a(), &buttons.a),
+        (|b| b.right.b(), &buttons.b),
+        (|b| b.middle.minus(), &buttons.minus),
+        (|b| b.middle.plus(), &buttons.plus),
+        (|b| b.left.left(), &buttons.left),
+        (|b| b.left.right(), &buttons.right),
+        (|b| b.left.down(), &buttons.down),
+        (|b| b.left.up(), &buttons.up),
+        (|b| b.middle.home(), &buttons.home),
+        (|b| b.middle.capture(), &buttons.capture),
+        (|b| b.middle.lstick(), &buttons.lstick),
+        (|b| b.middle.rstick(), &buttons.rstick),
+        (|b| b.right.x(), &buttons.x),
+        (|b| b.right.y(), &buttons.y),
+        (|b| b.right.zr(), &buttons.zr),
+        (|b| b.left.l(), &buttons.l),
+        (|b| b.right.r(), &buttons.r),
+        (|b| b.left.zl(), &buttons.zl),
     ]
-};
+}
 
 #[derive(Parser)]
 struct Opts {
-    #[arg(short, long, default_value = "0.0", global = true)]
-    gyro: f64,
-    #[arg(short, long, default_value = "0.0", global = true)]
-    stick: f64,
     #[command(subcommand)]
     command: Option<Command>,
 }
@@ -118,24 +89,6 @@ enum Command {
     Install,
     /// Stop running splamouse in the background
     Uninstall,
-}
-
-/// 感度の倍率。
-#[derive(Clone, Copy)]
-struct Sensitivity {
-    gyro: f64,
-    stick: f64,
-}
-
-impl Sensitivity {
-    /// -5.0〜5.0 で指定された感度を倍率にする。範囲外なら `None`。
-    fn from_opts(opts: &Opts) -> Option<Self> {
-        let range = -5.0..=5.0;
-        (range.contains(&opts.gyro) && range.contains(&opts.stick)).then_some(Self {
-            gyro: 2.0 + opts.gyro * 0.2,
-            stick: 2.0 + opts.stick * 0.2,
-        })
-    }
 }
 
 /// センサーから読んだ最新の値。
@@ -179,15 +132,20 @@ impl Velocity {
 /// ⌘ などが残ると、再接続後のクリック等にも付いてしまう。
 struct Held<'a> {
     enigo: &'a Mutex<Enigo>,
-    /// `BINDINGS` の各ボタンを押しているか
-    pressed: [bool; BINDINGS.len()],
+    bindings: [(IsPressed, &'a Action); BUTTON_COUNT],
+    /// 中央へ戻す要求(マウスのスレッドが受け取る)
+    center: &'a AtomicBool,
+    /// `bindings` の各ボタンを押しているか
+    pressed: [bool; BUTTON_COUNT],
 }
 
 impl<'a> Held<'a> {
-    fn new(enigo: &'a Mutex<Enigo>) -> Self {
+    fn new(enigo: &'a Mutex<Enigo>, buttons: &'a Buttons, center: &'a AtomicBool) -> Self {
         Self {
             enigo,
-            pressed: [false; BINDINGS.len()],
+            bindings: bindings(buttons),
+            center,
+            pressed: [false; BUTTON_COUNT],
         }
     }
 
@@ -195,7 +153,8 @@ impl<'a> Held<'a> {
     fn update(&mut self, status: ButtonsStatus) -> InputResult<bool> {
         let mut enigo = lock(self.enigo);
         let mut sent_keys = false;
-        for (i, (is_pressed, action)) in BINDINGS.iter().enumerate() {
+        for i in 0..BUTTON_COUNT {
+            let (is_pressed, action) = self.bindings[i];
             let pressed = is_pressed(&status);
             if pressed == self.pressed[i] {
                 continue;
@@ -211,10 +170,11 @@ impl<'a> Held<'a> {
     }
 
     fn press(&mut self, enigo: &mut Enigo, i: usize) -> InputResult<()> {
-        match BINDINGS[i].1 {
-            Action::Keys(keys) => keys.iter().try_for_each(|&key| enigo.key(key, Press))?,
+        match *self.bindings[i].1 {
+            Action::Keys(ref keys) => keys.iter().try_for_each(|&key| enigo.key(key, Press))?,
             Action::Hold(button) => enigo.button(button, Press)?,
-            Action::ClickOnRelease(_) => {}
+            Action::Center => self.center.store(true, Ordering::Relaxed),
+            Action::ClickOnRelease(_) | Action::None => {}
         }
         self.pressed[i] = true;
         Ok(())
@@ -224,8 +184,8 @@ impl<'a> Held<'a> {
     /// (X(⌘)を押したまま A(⌘ + →)を離したときの ⌘ や、ZL でドラッグ中に ZR を離したときの左ボタンなど)
     fn release(&mut self, enigo: &mut Enigo, i: usize) -> InputResult<()> {
         self.pressed[i] = false;
-        match BINDINGS[i].1 {
-            Action::Keys(keys) => {
+        match *self.bindings[i].1 {
+            Action::Keys(ref keys) => {
                 for &key in keys.iter().rev() {
                     if !self.any_pressed(|action| action.holds_key(key)) {
                         enigo.key(key, Release)?;
@@ -242,13 +202,14 @@ impl<'a> Held<'a> {
                     enigo.button(button, Click)?;
                 }
             }
+            Action::Center | Action::None => {}
         }
         Ok(())
     }
 
     /// 押しているボタンのどれかの操作が `f` を満たすか。
-    fn any_pressed(&self, f: impl Fn(Action) -> bool) -> bool {
-        BINDINGS
+    fn any_pressed(&self, f: impl Fn(&Action) -> bool) -> bool {
+        self.bindings
             .iter()
             .zip(self.pressed)
             .any(|(&(_, action), pressed)| pressed && f(action))
@@ -258,7 +219,7 @@ impl<'a> Held<'a> {
 impl Drop for Held<'_> {
     fn drop(&mut self) {
         let mut enigo = lock(self.enigo);
-        for (i, (_, action)) in BINDINGS.iter().enumerate() {
+        for (i, (_, action)) in self.bindings.into_iter().enumerate() {
             // 切断などで離したことになるボタンでは、クリックしない。
             if self.pressed[i] && !matches!(action, Action::ClickOnRelease(_)) {
                 let _ = self.release(&mut enigo, i);
@@ -277,20 +238,26 @@ impl Drop for SetOnDrop<'_> {
 }
 
 fn main() -> Result<()> {
-    let opts = Opts::parse();
-    let Some(sensitivity) = Sensitivity::from_opts(&opts) else {
-        eprintln!("gyro and stick must be between -5.0 and 5.0");
-        return Ok(());
-    };
-
-    match opts.command {
-        Some(Command::Install) => return launch_agent::install(opts.gyro, opts.stick),
+    match Opts::parse().command {
+        Some(Command::Install) => return launch_agent::install(),
         Some(Command::Uninstall) => return launch_agent::uninstall(),
         None => {}
     }
 
     // 接続が中途半端な間は同じパニックが繰り返されるので、パニックも重複を省いてログに出す。
     panic::set_hook(Box::new(|info| log_status(info.to_string())));
+
+    // 設定ファイルに誤りがあれば、直されるまで待つ。
+    // 終了すると、LaunchAgent では launchd が起動し直すたびに同じエラーがログに溜まってしまうため。
+    let config = loop {
+        match config::load() {
+            Ok(config) => break config,
+            Err(e) => {
+                log_status(format!("{e:#}"));
+                thread::sleep(RETRY_INTERVAL);
+            }
+        }
+    };
 
     // ⌘+クリックや ⌘+スクロールが効くよう、ボタンとマウスの両スレッドで1つの Enigo を共有して修飾キーの状態を揃える。
     // Enigo は drop 時に送ったイベント数に比例してスリープする(5ms 毎のマウス移動だと 1 時間で約 3 時間)ので、
@@ -316,7 +283,7 @@ fn main() -> Result<()> {
                 "Connected via {}",
                 if joycon.is_usb() { "USB" } else { "Bluetooth" }
             ));
-            run(joycon, enigo, sensitivity)
+            run(joycon, enigo, &config)
         }));
         if let Ok(Err(e)) = result {
             log_status(format!("Disconnected: {e:#}"));
@@ -390,7 +357,7 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 }
 
 /// 接続したコントローラーでマウスを操作する。切断などで読めなくなったら返る。
-fn run(mut joycon: JoyCon, enigo: &Mutex<Enigo>, sensitivity: Sensitivity) -> Result<()> {
+fn run(mut joycon: JoyCon, enigo: &Mutex<Enigo>, config: &config::Config) -> Result<()> {
     let battery_level = joycon.tick()?.info.battery_level();
 
     joycon.set_player_light(light::PlayerLights::new(
@@ -410,10 +377,12 @@ fn run(mut joycon: JoyCon, enigo: &Mutex<Enigo>, sensitivity: Sensitivity) -> Re
     // ボタンを送った後に待つ間も、コントローラーの読み取りとマウスの移動が止まらないよう別スレッドにする。
     let motion = Mutex::new(Motion::default());
     let stop = AtomicBool::new(false);
+    let center = AtomicBool::new(false);
     let (buttons_tx, buttons_rx) = mpsc::channel();
     thread::scope(|s| {
-        s.spawn(|| move_cursor(&motion, enigo, sensitivity, &stop));
-        let buttons = s.spawn(move || send_buttons(buttons_rx, enigo));
+        s.spawn(|| move_cursor(&motion, enigo, config.sensitivity, &center, &stop));
+        let buttons =
+            s.spawn(|| send_buttons(buttons_rx, Held::new(enigo, &config.buttons, &center)));
 
         // 読み取りが(パニックも含めて)終わったら、マウスのスレッドを止める。
         // ボタンのスレッドは、buttons_tx が drop されると受け取り済みの分を送り終えてから止まる。
@@ -456,8 +425,7 @@ fn read_controller(
 }
 
 /// 受け取ったボタンの状態から、押した・離したボタンの操作を送る。
-fn send_buttons(buttons: Receiver<ButtonsStatus>, enigo: &Mutex<Enigo>) -> Result<()> {
-    let mut held = Held::new(enigo);
+fn send_buttons(buttons: Receiver<ButtonsStatus>, mut held: Held) -> Result<()> {
     for status in buttons {
         // update が Enigo を解放してから待つので、待っている間もマウスは動く。
         if held.update(status)? {
@@ -468,17 +436,21 @@ fn send_buttons(buttons: Receiver<ButtonsStatus>, enigo: &Mutex<Enigo>) -> Resul
 }
 
 /// `stop` が立つまで、スティックとモーションでマウスとホイールを動かし続ける。
+/// `center` が立ったら、ポインタを画面中央へ滑らかに戻す。
 fn move_cursor(
     motion: &Mutex<Motion>,
     enigo: &Mutex<Enigo>,
     sensitivity: Sensitivity,
+    center: &AtomicBool,
     stop: &AtomicBool,
 ) {
-    let Sensitivity { gyro, stick } = sensitivity;
+    let (gyro, stick) = (sensitivity.gyro_factor(), sensitivity.stick_factor());
     let mut wheel_x = Velocity::default();
     let mut wheel_y = Velocity::default();
     let mut mouse_x = Velocity::default();
     let mut mouse_y = Velocity::default();
+    // 中央へ戻している最中のアニメーション
+    let mut glide: Option<Glide> = None;
 
     while !stop.load(Ordering::Relaxed) {
         let Motion {
@@ -513,10 +485,60 @@ fn move_cursor(
             if dly != 0.0 {
                 let _ = enigo.scroll(dly as i32, Axis::Vertical);
             }
-            let _ = enigo.move_mouse(drx as i32, dry as i32, Coordinate::Rel);
+            // 中央へ戻す要求が来たら、その時点の位置からアニメーションを始める。
+            if center.swap(false, Ordering::Relaxed) {
+                glide = Glide::to_center(&enigo);
+            }
+            match glide.as_mut().and_then(Iterator::next) {
+                Some((x, y)) => {
+                    // 中央でぴったり止まるよう、移動中のスティックとモーションの分は捨てる。
+                    mouse_x = Velocity::default();
+                    mouse_y = Velocity::default();
+                    let _ = enigo.move_mouse(x, y, Coordinate::Abs);
+                }
+                None => {
+                    glide = None;
+                    let _ = enigo.move_mouse(drx as i32, dry as i32, Coordinate::Rel);
+                }
+            }
         }
 
         thread::sleep(MOUSE_INTERVAL);
+    }
+}
+
+/// 現在位置からメインディスプレイの中央へ、ease-out で動かす座標列。
+struct Glide {
+    from: (f64, f64),
+    to: (f64, f64),
+    step: u32,
+}
+
+impl Glide {
+    fn to_center(enigo: &Enigo) -> Option<Self> {
+        let (x, y) = enigo.location().ok()?;
+        let (width, height) = enigo.main_display().ok()?;
+        Some(Self {
+            from: (x as f64, y as f64),
+            to: (width as f64 / 2.0, height as f64 / 2.0),
+            step: 0,
+        })
+    }
+}
+
+impl Iterator for Glide {
+    type Item = (i32, i32);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.step >= GLIDE_STEPS {
+            return None;
+        }
+        self.step += 1;
+        let t = f64::from(self.step) / f64::from(GLIDE_STEPS);
+        // ease-out cubic: 素早く動き出して、中央でゆっくり止まる。
+        let eased = 1.0 - (1.0 - t).powi(3);
+        let lerp = |from: f64, to: f64| (from + (to - from) * eased).round() as i32;
+        Some((lerp(self.from.0, self.to.0), lerp(self.from.1, self.to.1)))
     }
 }
 
