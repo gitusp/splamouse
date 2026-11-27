@@ -9,7 +9,7 @@ use joycon::{
     IMU, JoyCon,
     hidapi::{BusType, DeviceInfo, HidApi},
     joycon_sys::{
-        HID_IDS, NINTENDO_VENDOR_ID,
+        JOYCON_L_BT, JOYCON_R_BT, NINTENDO_VENDOR_ID, PRO_CONTROLLER,
         input::{BatteryLevel, ButtonsStatus},
         light::{self, PlayerLight},
     },
@@ -30,6 +30,9 @@ const MOUSE_INTERVAL: Duration = Duration::from_millis(5);
 /// キーを送った後、次のボタン入力を送るまで待つ時間。
 /// キー入力の切れ目で待たないと、マシンスペックによって順番が前後してしまう。
 const KEY_INTERVAL: Duration = Duration::from_millis(100);
+/// 対応しているコントローラー。
+/// 充電グリップは joycon クレートが対応しておらず `JoyCon::new` がパニックするので含めない。
+const PRODUCT_IDS: [u16; 3] = [JOYCON_L_BT, JOYCON_R_BT, PRO_CONTROLLER];
 /// コントローラーが見つからないときに探し直す間隔。
 const RETRY_INTERVAL: Duration = Duration::from_secs(1);
 /// ドリフト防止のため、これより小さいスティックの傾きは無視する。
@@ -328,7 +331,7 @@ fn new_enigo() -> Result<Enigo> {
 /// 接続されているコントローラーを探す。USB と Bluetooth の両方で見えている場合は USB を優先する。
 fn find_controller(api: &HidApi) -> Option<&DeviceInfo> {
     api.device_list()
-        .filter(|x| x.vendor_id() == NINTENDO_VENDOR_ID && HID_IDS.contains(&x.product_id()))
+        .filter(|x| x.vendor_id() == NINTENDO_VENDOR_ID && PRODUCT_IDS.contains(&x.product_id()))
         .min_by_key(|x| !matches!(x.bus_type(), BusType::Usb))
 }
 
