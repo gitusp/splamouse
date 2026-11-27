@@ -259,14 +259,13 @@ fn reads_a_report() {
     // Last sample first.
     let imu = report.imu.unwrap();
     for (imu, sample) in imu.iter().zip([2.0, 1.0, 0.0]) {
-        let gyro_unit = 4000.0 * 1.147 / 65535.0;
-        assert_eq!(imu.gyro.x, 1000.0 * sample * gyro_unit);
+        assert_eq!(imu.gyro.x, 1000.0 * sample * (936.0 / (13371.0 - 8.0)));
         // Negated on the Pro Controller.
-        assert_eq!(imu.gyro.y, -((-8.0 + 8.0) * gyro_unit));
+        assert_eq!(imu.gyro.y, -0.0);
         assert_eq!(imu.gyro.z, -0.0);
-        assert_eq!(imu.accel.x, -((100.0 + sample) * 4.0 / (16383.0 - 16.0)));
-        assert_eq!(imu.accel.y, -200.0 * 4.0 / (16383.0 + 16.0));
-        assert_eq!(imu.accel.z, 4096.0 * 4.0 / (16383.0 - 32.0));
+        assert_eq!(imu.accel.x, -((100.0 + sample) * (4.0 / (16384.0 - 16.0))));
+        assert_eq!(imu.accel.y, -200.0 * (4.0 / (16384.0 + 16.0)));
+        assert_eq!(imu.accel.z, 4096.0 * (4.0 / (16384.0 - 32.0)));
     }
 }
 
@@ -276,6 +275,8 @@ fn uses_the_user_imu_calibration() {
     let mut user = vec![0xB2, 0xA1];
     user.extend([0; 24]);
     user[2 + 12..][..2].copy_from_slice(&100i16.to_le_bytes());
+    // The coefficients come from the factory calibration.
+    user[2 + 6..][..2].copy_from_slice(&8192i16.to_le_bytes());
     fake.state().flash[0x8026..][..26].copy_from_slice(&user);
     let mut joycon = fake.connect(Model::RightJoyCon);
 
@@ -287,7 +288,25 @@ fn uses_the_user_imu_calibration() {
     let imu = joycon.read().unwrap().imu.unwrap()[2];
     assert_eq!(imu.gyro, Vec3::default());
     // Negated on the right Joy-Con.
-    assert_eq!(imu.accel.x, -(1000.0 * 4.0 / 16383.0));
+    assert_eq!(imu.accel.x, -(1000.0 * (4.0 / 16384.0)));
+}
+
+#[test]
+fn broken_imu_coefficients() {
+    let fake = Fake::new();
+    fake.state().flash[0x6020 + 6..][..6].fill(0xFF);
+    fake.state().flash[0x6020 + 18..][..6].fill(0);
+    let mut joycon = fake.connect(Model::RightJoyCon);
+
+    let mut report = standard(0x30);
+    report[13..15].copy_from_slice(&1000i16.to_le_bytes());
+    report[19..21].copy_from_slice(&108i16.to_le_bytes());
+    fake.push(report);
+
+    let imu = joycon.read().unwrap().imu.unwrap()[2];
+    // The default coefficients, with the origins.
+    assert_eq!(imu.accel.x, -(1000.0 * (4.0 / 16384.0)));
+    assert_eq!(imu.gyro.x, 100.0 * (936.0 / 13371.0));
 }
 
 #[test]
