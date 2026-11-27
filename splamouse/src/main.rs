@@ -391,13 +391,6 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 
 /// 接続したコントローラーでマウスを操作する。切断などで読めなくなったら返る。
 fn run(mut joycon: JoyCon, enigo: &Mutex<Enigo>, sensitivity: Sensitivity) -> Result<()> {
-    joycon.set_home_light(light::HomeLight::new(
-        0x8,
-        0x2,
-        0x0,
-        &[(0xf, 0xf, 0), (0x2, 0xf, 0)],
-    ))?;
-
     let battery_level = joycon.tick()?.info.battery_level();
 
     joycon.set_player_light(light::PlayerLights::new(
