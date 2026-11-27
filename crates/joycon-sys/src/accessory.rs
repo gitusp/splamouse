@@ -120,7 +120,7 @@ impl fmt::Debug for AccessoryResponse {
         f.debug_struct("AccessoryResponse")
             .field("maybe_error", &self.error)
             .field("always_0x00", &self.unknown_0x00)
-            .field("data", unsafe { &&self.u.raw[..self.len as usize] })
+            .field("data", &unsafe { &self.u.raw[..self.len as usize] })
             .finish()
     }
 }
