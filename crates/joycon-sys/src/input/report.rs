@@ -108,7 +108,7 @@ impl InputReport {
 
     #[cfg(test)]
     pub(crate) unsafe fn u_mcu_report(&self) -> &MCUReport {
-        &self.u.standard_full_mcu.2
+        unsafe { &self.u.standard_full_mcu.2 }
     }
 }
 

@@ -185,7 +185,7 @@ impl<Id: ToPrimitive> From<Id> for RawId<Id> {
 
 impl<Id: fmt::Debug + FromPrimitive + Copy> fmt::Debug for RawId<Id> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        if let Some(id) = self.try_into() {
+        if let Some(id) = (*self).try_into() {
             write!(f, "{:?}", id)
         } else {
             f.debug_tuple(&format!("RawId<{}>", type_name::<Id>()))
@@ -197,7 +197,7 @@ impl<Id: fmt::Debug + FromPrimitive + Copy> fmt::Debug for RawId<Id> {
 
 impl<Id: fmt::Display + FromPrimitive + Copy> fmt::Display for RawId<Id> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        if let Some(id) = self.try_into() {
+        if let Some(id) = (*self).try_into() {
             write!(f, "{}", id)
         } else {
             f.debug_tuple("RawId")
@@ -209,7 +209,7 @@ impl<Id: fmt::Display + FromPrimitive + Copy> fmt::Display for RawId<Id> {
 
 impl<Id: FromPrimitive + PartialEq + Copy> PartialEq<Id> for RawId<Id> {
     fn eq(&self, other: &Id) -> bool {
-        self.try_into().map(|x| x == *other).unwrap_or(false)
+        (*self).try_into().map(|x| x == *other).unwrap_or(false)
     }
 }
 

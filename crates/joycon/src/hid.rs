@@ -339,7 +339,7 @@ impl JoyCon {
 
     #[instrument(level = "info", skip(self), err)]
     pub unsafe fn write_spi_raw(&mut self, range: SPIRange, data: &[u8]) -> Result<bool> {
-        let reply = self.call_subcmd_wait(SPIWriteRequest::new(range, data))?;
+        let reply = self.call_subcmd_wait(unsafe { SPIWriteRequest::new(range, data) })?;
         Ok(reply.is_spi_write_success().unwrap())
     }
 }

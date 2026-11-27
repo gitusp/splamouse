@@ -116,12 +116,12 @@ impl OutputReport {
 
     #[cfg(test)]
     pub(crate) unsafe fn as_mcu_request(&self) -> &MCURequest {
-        &self.u.request_mcu_data
+        unsafe { &self.u.request_mcu_data }
     }
 
     #[cfg(test)]
     pub(crate) unsafe fn as_mcu_cmd(&self) -> &MCUCommand {
-        &self.u.rumble_subcmd.u.set_mcu_conf
+        unsafe { &self.u.rumble_subcmd.u.set_mcu_conf }
     }
 }
 
