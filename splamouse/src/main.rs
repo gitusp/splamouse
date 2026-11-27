@@ -3,43 +3,180 @@ use clap::Parser;
 use enigo::{
     Axis, Button, Coordinate,
     Direction::{Click, Press, Release},
-    Enigo, Key, Keyboard, Mouse, NewConError, Settings,
+    Enigo, InputResult, Key, Keyboard, Mouse, NewConError, Settings,
 };
 use joycon::{
-    hidapi::{BusType, HidApi},
+    IMU, JoyCon,
+    hidapi::{BusType, DeviceInfo, HidApi},
     joycon_sys::{
-        input::{BatteryLevel },
-        light::{self, PlayerLight},
         HID_IDS, NINTENDO_VENDOR_ID,
+        input::{BatteryLevel, ButtonsStatus},
+        light::{self, PlayerLight},
     },
-    JoyCon,
 };
-use std::panic::AssertUnwindSafe;
-use std::sync::{Mutex, Arc};
 use std::{
-    time::Duration,
+    panic::{self, AssertUnwindSafe},
+    sync::{
+        Mutex, MutexGuard, PoisonError,
+        atomic::{AtomicBool, Ordering},
+        mpsc::{self, Receiver, Sender},
+    },
     thread,
+    time::Duration,
+};
+
+/// マウスとホイールを動かす間隔(リフレッシュレートより速い)。
+const MOUSE_INTERVAL: Duration = Duration::from_millis(5);
+/// キーを送った後、次のボタン入力を送るまで待つ時間。
+/// キー入力の切れ目で待たないと、マシンスペックによって順番が前後してしまう。
+const KEY_INTERVAL: Duration = Duration::from_millis(100);
+/// コントローラーが見つからないときに探し直す間隔。
+const RETRY_INTERVAL: Duration = Duration::from_secs(1);
+/// ドリフト防止のため、これより小さいスティックの傾きは無視する。
+const STICK_DEADZONE: f64 = 0.2;
+/// ドリフト防止のため、これより小さいモーション(角速度)は無視する。
+const GYRO_DEADZONE: f64 = 2.0;
+
+// 配列によらず同じ位置のキーを押すよう、文字ではなく仮想キーコード(kVK_ANSI_*)で指定する。
+const KEY_C: Key = Key::Other(0x08);
+const KEY_R: Key = Key::Other(0x0F);
+const KEY_V: Key = Key::Other(0x09);
+const KEY_W: Key = Key::Other(0x0D);
+const KEY_Z: Key = Key::Other(0x06);
+
+/// ボタンに割り当てる操作。
+#[derive(Clone, Copy)]
+enum Action {
+    /// 押している間キーを押す。離すときは押したのと逆順に離す。
+    Keys(&'static [Key]),
+    /// 押している間マウスボタンを押す。
+    Hold(Button),
+    /// 離したときにクリックする。
+    ClickOnRelease(Button),
+}
+
+impl Action {
+    fn send(self, enigo: &mut Enigo, pressed: bool) -> InputResult<()> {
+        match (self, pressed) {
+            (Self::Keys(keys), true) => keys.iter().try_for_each(|&key| enigo.key(key, Press)),
+            (Self::Keys(keys), false) => keys
+                .iter()
+                .rev()
+                .try_for_each(|&key| enigo.key(key, Release)),
+            (Self::Hold(button), true) => enigo.button(button, Press),
+            (Self::Hold(button), false) => enigo.button(button, Release),
+            (Self::ClickOnRelease(_), true) => Ok(()),
+            (Self::ClickOnRelease(button), false) => enigo.button(button, Click),
+        }
+    }
+}
+
+/// ボタンが押されているか。
+type IsPressed = fn(&ButtonsStatus) -> bool;
+
+/// ボタンと操作の対応。同時に変化したボタンはこの順に送る。
+#[rustfmt::skip]
+const BINDINGS: [(IsPressed, Action); 18] = {
+    use Action::{ClickOnRelease, Hold, Keys};
+    [
+        (|b| b.right.a(), Keys(&[Key::Meta, Key::RightArrow])),
+        (|b| b.right.b(), Keys(&[Key::Meta, Key::LeftArrow])),
+        (|b| b.middle.minus(), Keys(&[Key::Meta, KEY_W])),
+        (|b| b.middle.plus(), Keys(&[Key::Meta, KEY_R])),
+        (|b| b.left.left(), Keys(&[Key::Control, Key::Shift, Key::Tab])),
+        (|b| b.left.right(), Keys(&[Key::Control, Key::Tab])),
+        (|b| b.left.down(), Keys(&[Key::Meta, KEY_C])),
+        (|b| b.left.up(), Keys(&[Key::Meta, KEY_V])),
+        (|b| b.middle.home(), Keys(&[Key::Meta, Key::Shift, KEY_Z])),
+        (|b| b.middle.capture(), Keys(&[Key::Meta, KEY_Z])),
+        (|b| b.middle.lstick(), Hold(Button::Middle)),
+        (|b| b.middle.rstick(), Keys(&[Key::Return])),
+        (|b| b.right.x(), Keys(&[Key::Meta])),
+        (|b| b.right.y(), Keys(&[Key::Shift])),
+        (|b| b.right.zr(), ClickOnRelease(Button::Left)),
+        (|b| b.left.l(), Keys(&[Key::Alt])),
+        (|b| b.right.r(), ClickOnRelease(Button::Right)),
+        (|b| b.left.zl(), Hold(Button::Left)),
+    ]
 };
 
 #[derive(Parser)]
 struct Opts {
     #[arg(short, long, default_value = "0.0")]
-    pub gyro: f64,
+    gyro: f64,
     #[arg(short, long, default_value = "0.0")]
-    pub stick: f64,
+    stick: f64,
+}
+
+/// 感度の倍率。
+#[derive(Clone, Copy)]
+struct Sensitivity {
+    gyro: f64,
+    stick: f64,
+}
+
+impl Sensitivity {
+    /// -5.0〜5.0 で指定された感度を倍率にする。範囲外なら `None`。
+    fn from_opts(opts: &Opts) -> Option<Self> {
+        let range = -5.0..=5.0;
+        (range.contains(&opts.gyro) && range.contains(&opts.stick)).then_some(Self {
+            gyro: 2.0 + opts.gyro * 0.2,
+            stick: 2.0 + opts.stick * 0.2,
+        })
+    }
+}
+
+/// センサーから読んだ最新の値。
+#[derive(Clone, Copy, Default)]
+struct Motion {
+    /// L スティックの傾き (x, y)
+    left_stick: [f64; 2],
+    /// R スティックの傾き (x, y)
+    right_stick: [f64; 2],
+    /// ジャイロの角速度 (y, z)
+    gyro: [f64; 2],
+    /// コントローラーの姿勢(度)
+    tilt: f64,
+}
+
+/// スティックで動かす 1 方向の速度。
+#[derive(Default)]
+struct Velocity {
+    speed: f64,
+    /// 整数に丸めた端数(次回に持ち越す)
+    remainder: f64,
+}
+
+impl Velocity {
+    /// スティックの入力で加速する。入力が無くなっても少しずつ減速する。
+    fn accelerate(&mut self, input: f64) {
+        self.speed = (self.speed + input) * 0.9;
+    }
+
+    /// 今回の移動量として、速度に `extra` を足して整数に丸めた値を返す。
+    fn step(&mut self, extra: f64) -> f64 {
+        let distance = self.speed + extra + self.remainder;
+        let rounded = distance.round();
+        self.remainder = distance - rounded;
+        rounded
+    }
+}
+
+/// drop されたとき(パニックの巻き戻しも含む)にフラグを立てる。
+struct SetOnDrop<'a>(&'a AtomicBool);
+
+impl Drop for SetOnDrop<'_> {
+    fn drop(&mut self) {
+        self.0.store(true, Ordering::Relaxed);
+    }
 }
 
 fn main() -> Result<()> {
     let opts = Opts::parse();
-
-    if opts.gyro.abs() > 5.0 || opts.stick.abs() > 5.0 {
+    let Some(sensitivity) = Sensitivity::from_opts(&opts) else {
         eprintln!("gyro and stick must be between -5.0 and 5.0");
         return Ok(());
-    }
-
-    // 感度計算
-    let gyro = 2.0 + opts.gyro * 0.2;
-    let stick = 2.0 + opts.stick * 0.2;
+    };
 
     // ⌘+クリックや ⌘+スクロールが効くよう、ボタンとマウスの両スレッドで1つの Enigo を共有して修飾キーの状態を揃える。
     // Enigo は drop 時に送ったイベント数に比例してスリープする(5ms 毎のマウス移動だと 1 時間で約 3 時間)ので、
@@ -49,32 +186,27 @@ fn main() -> Result<()> {
     let mut api = HidApi::new()?;
     loop {
         api.refresh_devices()?;
-        // USB と Bluetooth の両方で見えている場合は USB を優先する。
-        if let Some(device_info) = api
-            .device_list()
-            .filter(|x| x.vendor_id() == NINTENDO_VENDOR_ID && HID_IDS.contains(&x.product_id()))
-            .min_by_key(|x| !matches!(x.bus_type(), BusType::Usb))
-        {
-            let device = device_info
-                .open_device(&api)
-                .with_context(|| format!("error opening the HID device {:?}", device_info))?;
-
-            // NOTE: 接続が中途半端な際、ここでよくパニックする。
-            // パニック後は device を捨てて再接続するだけなので AssertUnwindSafe で問題ない。
-            let _ = std::panic::catch_unwind(AssertUnwindSafe(|| -> Result<()> {
-                let joycon = JoyCon::new(device, device_info.clone())?;
-                eprintln!(
-                    "Connected via {}",
-                    if joycon.is_usb() { "USB" } else { "Bluetooth" }
-                );
-                hid_main(joycon, enigo, gyro, stick).context("error running the command")?;
-                Ok(())
-            }));
-            release_held_keys(enigo);
-        } else {
+        let Some(device_info) = find_controller(&api) else {
             eprintln!("No device found");
-            thread::sleep(Duration::from_secs(1));
-        }
+            thread::sleep(RETRY_INTERVAL);
+            continue;
+        };
+        let device = device_info
+            .open_device(&api)
+            .with_context(|| format!("error opening the HID device {device_info:?}"))?;
+        let device_info = device_info.clone();
+
+        // NOTE: 接続が中途半端な際、よくパニックする。
+        // パニックやエラーの後は device を捨てて再接続するだけなので、結果は捨て、AssertUnwindSafe でも問題ない。
+        let _ = panic::catch_unwind(AssertUnwindSafe(|| -> Result<()> {
+            let joycon = JoyCon::new(device, device_info)?;
+            eprintln!(
+                "Connected via {}",
+                if joycon.is_usb() { "USB" } else { "Bluetooth" }
+            );
+            run(joycon, enigo, sensitivity)
+        }));
+        release_held_keys(enigo);
     }
 }
 
@@ -98,23 +230,36 @@ fn new_enigo() -> Result<Enigo> {
                     );
                     open_prompt = false;
                 }
-                thread::sleep(Duration::from_secs(1));
+                thread::sleep(RETRY_INTERVAL);
             }
             Err(e) => return Err(e).context("error initializing the input simulator"),
         }
     }
 }
 
+/// 接続されているコントローラーを探す。USB と Bluetooth の両方で見えている場合は USB を優先する。
+fn find_controller(api: &HidApi) -> Option<&DeviceInfo> {
+    api.device_list()
+        .filter(|x| x.vendor_id() == NINTENDO_VENDOR_ID && HID_IDS.contains(&x.product_id()))
+        .min_by_key(|x| !matches!(x.bus_type(), BusType::Usb))
+}
+
+/// ロックを取る。他のスレッドがパニックしても中身は使い続けられるので、ポイズンは無視する。
+fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
 /// 押しっぱなしのキーを離す。切断時に ⌘ などが残ると、再接続後のクリック等にも付いてしまう。
 fn release_held_keys(enigo: &Mutex<Enigo>) {
-    let mut enigo = enigo.lock().unwrap();
+    let mut enigo = lock(enigo);
     let (keys, _) = enigo.held();
     for key in keys {
         let _ = enigo.key(key, Release);
     }
 }
 
-fn hid_main(mut joycon: JoyCon, enigo: &Mutex<Enigo>, gyro: f64, stick: f64) -> Result<()> {
+/// 接続したコントローラーでマウスを操作する。切断などで読めなくなったら返る。
+fn run(mut joycon: JoyCon, enigo: &Mutex<Enigo>, sensitivity: Sensitivity) -> Result<()> {
     joycon.set_home_light(light::HomeLight::new(
         0x8,
         0x2,
@@ -135,482 +280,135 @@ fn hid_main(mut joycon: JoyCon, enigo: &Mutex<Enigo>, gyro: f64, stick: f64) -> 
         },
     ))?;
 
-    monitor(&mut joycon, enigo, gyro, stick)?;
-    Ok(())
-}
-
-fn monitor(joycon: &mut JoyCon, enigo: &Mutex<Enigo>, gyro: f64, stick: f64) -> Result<()> {
     joycon.enable_imu()?;
     joycon.load_calibration()?;
 
+    // ボタンを送った後に待つ間も、コントローラーの読み取りとマウスの移動が止まらないよう別スレッドにする。
+    let motion = Mutex::new(Motion::default());
+    let stop = AtomicBool::new(false);
+    let (buttons_tx, buttons_rx) = mpsc::channel();
     thread::scope(|s| {
-        // ジャイロの値
-        let gy = Arc::new(Mutex::new(0.0));
-        let gz = Arc::new(Mutex::new(0.0));
-        let _gy = Arc::clone(&gy);
-        let _gz = Arc::clone(&gz);
+        s.spawn(|| move_cursor(&motion, enigo, sensitivity, &stop));
+        let buttons = s.spawn(move || send_buttons(buttons_rx, enigo));
 
-        // L-スティックの値
-        let slx = Arc::new(Mutex::new(0.0));
-        let sly = Arc::new(Mutex::new(0.0));
-        let _slx = Arc::clone(&slx);
-        let _sly = Arc::clone(&sly);
+        // 読み取りが(パニックも含めて)終わったら、マウスのスレッドを止める。
+        // ボタンのスレッドは、buttons_tx が drop されると受け取り済みの分を送り終えてから止まる。
+        let read = {
+            let _stop = SetOnDrop(&stop);
+            read_controller(&mut joycon, &motion, buttons_tx)
+        };
+        let send = buttons.join().unwrap_or_else(|e| panic::resume_unwind(e));
+        // ボタンのスレッドが先に失敗すると読み取りも送信エラーで終わるので、そちらを優先して返す。
+        send.and(read)
+    })
+}
 
-        // R-スティックの値
-        let srx = Arc::new(Mutex::new(0.0));
-        let sry = Arc::new(Mutex::new(0.0));
-        let _srx = Arc::clone(&srx);
-        let _sry = Arc::clone(&sry);
+/// コントローラーを読み続け、スティックとモーションを `motion` に書き、ボタンを `buttons` に送る。
+fn read_controller(
+    joycon: &mut JoyCon,
+    motion: &Mutex<Motion>,
+    buttons: Sender<ButtonsStatus>,
+) -> Result<()> {
+    let mut latest = Motion::default();
+    loop {
+        let report = joycon.tick()?;
 
-        // コントローラーの姿勢
-        let rot = Arc::new(Mutex::new(0.0));
-        let _rot = Arc::clone(&rot);
+        latest.left_stick = [report.left_stick.x, report.left_stick.y];
+        latest.right_stick = [report.right_stick.x, report.right_stick.y];
+        // 遅れて届いたサブコマンドの応答などモーションの無いレポートでは、前回の値を使い続ける。
+        for frame in report.imu.iter().flatten() {
+            latest.gyro = [frame.gyro.y, frame.gyro.z];
+            // コントローラーの姿勢(加速度センサでドリフト修正)
+            let accel_tilt = (frame.accel.y / frame.accel.z).atan().to_degrees();
+            latest.tilt =
+                (latest.tilt - frame.gyro.x * IMU::SAMPLE_DURATION) * 0.95 + accel_tilt * 0.05;
+        }
+        *lock(motion) = latest;
 
-        // 割り込みシグナル
-        let interrupt = Arc::new(Mutex::new(false));
-        let _interrupt = Arc::clone(&interrupt);
+        buttons
+            .send(report.buttons)
+            .context("the button thread has stopped")?;
+    }
+}
 
-        // 状態取得スレッド(コントローラーの状況によって固まる)
-        let handler = s.spawn(move || -> Result<()> {
-            // ボタンの状態
-            let mut a = false;
-            let mut b = false;
-            let mut x = false;
-            let mut y = false;
-            let mut l = false;
-            let mut r = false;
-            let mut zl = false;
-            let mut zr = false;
-            let mut minus = false;
-            let mut plus = false;
-            let mut left = false;
-            let mut right = false;
-            let mut down = false;
-            let mut up = false;
-            let mut capture = false;
-            let mut home = false;
-            let mut lstick = false;
-            let mut rstick = false;
-
-            loop {
-                let mut should_sleep = false;
-
-                let report = joycon.tick()?;
-
-                // ジャイロの値
-                for frame in &report.imu.unwrap() {
-                    let mut gy = _gy.lock().unwrap();
-                    *gy = frame.gyro.y;
-
-                    let mut gz = _gz.lock().unwrap();
-                    *gz = frame.gyro.z;
-
-                    // コントローラーの姿勢(加速度センサでドリフト修正)
-                    let arot = (frame.accel[1] / frame.accel[2]).atan().to_degrees();
-                    let mut rot = _rot.lock().unwrap();
-                    *rot = (*rot - frame.gyro.x * 0.005) * 0.95 + arot * 0.05;
-                }
-
-                // L-スティックの値
-                let mut slx = _slx.lock().unwrap();
-                *slx = report.left_stick.x;
-                let mut sly = _sly.lock().unwrap();
-                *sly = report.left_stick.y;
-
-                // R-スティックの値
-                let mut srx = _srx.lock().unwrap();
-                *srx = report.right_stick.x;
-                let mut sry = _sry.lock().unwrap();
-                *sry = report.right_stick.y;
-
-                let mut enigo = enigo.lock().unwrap();
-
-                // Aボタン押下時
-                if report.buttons.right.a() {
-                    if !a {
-                        enigo.key(Key::Meta, Press)?;
-                        enigo.key(Key::RightArrow, Press)?;
-                        should_sleep = true;
-                        a = true;
-                    }
-                } else {
-                    if a {
-                        enigo.key(Key::RightArrow, Release)?;
-                        enigo.key(Key::Meta, Release)?;
-                        should_sleep = true;
-                        a = false;
-                    }
-                }
-
-                // Bボタン押下時
-                if report.buttons.right.b() {
-                    if !b {
-                        enigo.key(Key::Meta, Press)?;
-                        enigo.key(Key::LeftArrow, Press)?;
-                        should_sleep = true;
-                        b = true;
-                    }
-                } else {
-                    if b {
-                        enigo.key(Key::LeftArrow, Release)?;
-                        enigo.key(Key::Meta, Release)?;
-                        should_sleep = true;
-                        b = false;
-                    }
-                }
-
-                // マイナスボタン押下時
-                if report.buttons.middle.minus() {
-                    if !minus {
-                        enigo.key(Key::Meta, Press)?;
-                        enigo.key(Key::Other(0x0D), Press)?;
-                        should_sleep = true;
-                        minus = true;
-                    }
-                } else {
-                    if minus {
-                        enigo.key(Key::Other(0x0D), Release)?;
-                        enigo.key(Key::Meta, Release)?;
-                        should_sleep = true;
-                        minus = false;
-                    }
-                }
-
-                // プラスボタン押下時
-                if report.buttons.middle.plus() {
-                    if !plus {
-                        enigo.key(Key::Meta, Press)?;
-                        enigo.key(Key::Other(0x0F), Press)?;
-                        should_sleep = true;
-                        plus = true;
-                    }
-                } else {
-                    if plus {
-                        enigo.key(Key::Other(0x0F), Release)?;
-                        enigo.key(Key::Meta, Release)?;
-                        should_sleep = true;
-                        plus = false;
-                    }
-                }
-
-                // 左ボタン押下時
-                if report.buttons.left.left() {
-                    if !left {
-                        enigo.key(Key::Control, Press)?;
-                        enigo.key(Key::Shift, Press)?;
-                        enigo.key(Key::Tab, Press)?;
-                        should_sleep = true;
-                        left = true;
-                    }
-                } else {
-                    if left {
-                        enigo.key(Key::Tab, Release)?;
-                        enigo.key(Key::Shift, Release)?;
-                        enigo.key(Key::Control, Release)?;
-                        should_sleep = true;
-                        left = false;
-                    }
-                }
-
-                // 右ボタン押下時
-                if report.buttons.left.right() {
-                    if !right {
-                        enigo.key(Key::Control, Press)?;
-                        enigo.key(Key::Tab, Press)?;
-                        should_sleep = true;
-                        right = true;
-                    }
-                } else {
-                    if right {
-                        enigo.key(Key::Tab, Release)?;
-                        enigo.key(Key::Control, Release)?;
-                        should_sleep = true;
-                        right = false;
-                    }
-                }
-
-                // 下ボタン押下時
-                if report.buttons.left.down() {
-                    if !down {
-                        enigo.key(Key::Meta, Press)?;
-                        enigo.key(Key::Other(0x08), Press)?;
-                        should_sleep = true;
-                        down = true;
-                    }
-                } else {
-                    if down {
-                        enigo.key(Key::Other(0x08), Release)?;
-                        enigo.key(Key::Meta, Release)?;
-                        should_sleep = true;
-                        down = false;
-                    }
-                }
-
-                // 上ボタン押下時
-                if report.buttons.left.up() {
-                    if !up {
-                        enigo.key(Key::Meta, Press)?;
-                        enigo.key(Key::Other(0x09), Press)?;
-                        should_sleep = true;
-                        up = true;
-                    }
-                } else {
-                    if up {
-                        enigo.key(Key::Other(0x09), Release)?;
-                        enigo.key(Key::Meta, Release)?;
-                        should_sleep = true;
-                        up = false;
-                    }
-                }
-
-                // ホーム押下時
-                if report.buttons.middle.home() {
-                    if !home {
-                        enigo.key(Key::Meta, Press)?;
-                        enigo.key(Key::Shift, Press)?;
-                        enigo.key(Key::Other(0x06), Press)?;
-                        should_sleep = true;
-                        home = true;
-                    }
-                } else {
-                    if home {
-                        enigo.key(Key::Other(0x06), Release)?;
-                        enigo.key(Key::Shift, Release)?;
-                        enigo.key(Key::Meta, Release)?;
-                        should_sleep = true;
-                        home = false;
-                    }
-                }
-
-                // 撮影ボタン押下時
-                if report.buttons.middle.capture() {
-                    if !capture {
-                        enigo.key(Key::Meta, Press)?;
-                        enigo.key(Key::Other(0x06), Press)?;
-                        should_sleep = true;
-                        capture = true;
-                    }
-                } else {
-                    if capture {
-                        enigo.key(Key::Other(0x06), Release)?;
-                        enigo.key(Key::Meta, Release)?;
-                        should_sleep = true;
-                        capture = false;
-                    }
-                }
-
-                // L-stick押下時
-                if report.buttons.middle.lstick() {
-                    if !lstick {
-                        enigo.button(Button::Middle, Press)?;
-                        lstick = true;
-                    }
-                } else {
-                    if lstick {
-                        enigo.button(Button::Middle, Release)?;
-                        lstick = false;
-                    }
-                }
-
-                // R-stick押下時
-                if report.buttons.middle.rstick() {
-                    if !rstick {
-                        enigo.key(Key::Return, Press)?;
-                        should_sleep = true;
-                        rstick = true;
-                    }
-                } else {
-                    if rstick {
-                        enigo.key(Key::Return, Release)?;
-                        should_sleep = true;
-                        rstick = false;
-                    }
-                }
-
-                // Xボタン押下時
-                if report.buttons.right.x() {
-                    if !x {
-                        enigo.key(Key::Meta, Press)?;
-                        should_sleep = true;
-                        x = true;
-                    }
-                } else {
-                    if x {
-                        enigo.key(Key::Meta, Release)?;
-                        should_sleep = true;
-                        x = false;
-                    }
-                }
-
-                // Yボタン押下時
-                if report.buttons.right.y() {
-                    if !y {
-                        enigo.key(Key::Shift, Press)?;
-                        should_sleep = true;
-                        y = true;
-                    }
-                } else {
-                    if y {
-                        enigo.key(Key::Shift, Release)?;
-                        should_sleep = true;
-                        y = false;
-                    }
-                }
-
-                // ZRボタン押下時
-                if report.buttons.right.zr() {
-                    if !zr {
-                        zr = true;
-                    }
-                } else {
-                    if zr {
-                        enigo.button(Button::Left, Click)?;
-                        zr = false;
-                    }
-                }
-
-                // Lボタン押下時
-                if report.buttons.left.l() {
-                    if !l {
-                        enigo.key(Key::Alt, Press)?;
-                        should_sleep = true;
-                        l = true;
-                    }
-                } else {
-                    if l {
-                        enigo.key(Key::Alt, Release)?;
-                        should_sleep = true;
-                        l = false;
-                    }
-                }
-
-                // Rボタン押下時
-                if report.buttons.right.r() {
-                    if !r {
-                        r = true;
-                    }
-                } else {
-                    if r {
-                        enigo.button(Button::Right, Click)?;
-                        r = false;
-                    }
-                }
-
-                // ZLボタン押下時
-                if report.buttons.left.zl() {
-                    if !zl {
-                        enigo.button(Button::Left, Press)?;
-                        zl = true;
-                    }
-                } else {
-                    if zl {
-                        enigo.button(Button::Left, Release)?;
-                        zl = false;
-                    }
-                }
-
-                // スリープ中も UI スレッドがマウスを動かせるよう、先に Enigo を解放する。
-                drop(enigo);
-
-                // キー入力の切れ目でスリープしないと、マシンスペックによって順番が前後してしまう。
-                if should_sleep {
-                    thread::sleep(Duration::from_millis(100));
+/// 受け取ったボタンの状態から、押した・離したボタンの操作を送る。
+fn send_buttons(buttons: Receiver<ButtonsStatus>, enigo: &Mutex<Enigo>) -> Result<()> {
+    let mut held = [false; BINDINGS.len()];
+    for status in buttons {
+        let mut sent_keys = false;
+        {
+            let mut enigo = lock(enigo);
+            for ((is_pressed, action), held) in BINDINGS.iter().zip(&mut held) {
+                let pressed = is_pressed(&status);
+                if pressed != *held {
+                    action.send(&mut enigo, pressed)?;
+                    *held = pressed;
+                    sent_keys |= matches!(action, Action::Keys(_));
                 }
             }
-        });
-
-        // UI更新スレッド(リフレッシュレートより速い)
-        s.spawn(move || {
-            // ホイール速度
-            let mut vlx = 0.0;
-            let mut vly = 0.0;
-
-            // マウス速度
-            let mut vrx = 0.0;
-            let mut vry = 0.0;
-
-            // ホイール端数
-            let mut flx = 0.0;
-            let mut fly = 0.0;
-
-            // マウス端数
-            let mut frx = 0.0;
-            let mut fry = 0.0;
-
-            loop {
-                // 割り込み
-                if *_interrupt.lock().unwrap() {
-                    break;
-                }
-
-                // ホイール速度の調整(ドリフト防止のため微量のスティックは無視)
-                let uslx = *slx.lock().unwrap();
-                let usly = *sly.lock().unwrap();
-                vlx = (vlx + (if uslx.abs() < 0.2 { 0.0 } else { uslx }) * stick / 16.0) * 0.9;
-                vly = (vly - (if usly.abs() < 0.2 { 0.0 } else { usly }) * stick / 16.0) * 0.9;
-
-                // マウス速度の調整(ドリフト防止のため微量のスティックは無視)
-                let usrx = *srx.lock().unwrap();
-                let usry = *sry.lock().unwrap();
-                vrx = (vrx + (if usrx.abs() < 0.2 { 0.0 } else { usrx }) * stick * 2.0) * 0.9;
-                vry = (vry - (if usry.abs() < 0.2 { 0.0 } else { usry }) * stick * 2.0) * 0.9;
-
-                // モーション分
-                let radians = rot.lock().unwrap().to_radians();
-                let ugz = *gz.lock().unwrap();
-                let ugy = *gy.lock().unwrap();
-                // ドリフト防止のため微量のモーションは無視
-                let nugz = if ugz.abs() < 2.0 { 0.0 } else { ugz };
-                let nugy = if ugy.abs() < 2.0 { 0.0 } else { ugy };
-                let cos = radians.cos();
-                let sin = radians.sin();
-                let mx = (nugz * cos + nugy * sin) * gyro / 8.0;
-                let my = (nugz * sin - nugy * cos) * gyro / 8.0;
-
-                // 最終的なホイール移動量
-                let dlx = vlx + flx;
-                let dly = vly + fly;
-
-                // 最終的なマウス移動量
-                let drx = vrx + mx + frx;
-                let dry = vry + my + fry;
-
-                // 端数を持ち越し
-                let rdlx = dlx.round();
-                let rdly = dly.round();
-                flx = dlx - rdlx;
-                fly = dly - rdly;
-
-                let rdrx = drx.round();
-                let rdry = dry.round();
-                frx = drx - rdrx;
-                fry = dry - rdry;
-
-                {
-                    let mut enigo = enigo.lock().unwrap();
-
-                    // ホイール(enigo 0.6 は移動量 0 でもスクロールイベントを送るため、0 のときは呼ばない)
-                    if rdlx != 0.0 {
-                        let _ = enigo.scroll(rdlx as i32, Axis::Horizontal);
-                    }
-                    if rdly != 0.0 {
-                        let _ = enigo.scroll(rdly as i32, Axis::Vertical);
-                    }
-
-                    // マウス移動
-                    let _ = enigo.move_mouse(rdrx as i32, rdry as i32, Coordinate::Rel);
-                }
-
-                // 5ms毎に実行
-                thread::sleep(Duration::from_millis(5));
-            }
-        });
-
-        // センサースレッドが終了(切断等)したら、UIスレッドも落とす。
-        let _ = handler.join().unwrap();
-        let mut _interrupt = interrupt.lock().unwrap();
-        *_interrupt = true;
-    });
-
+        }
+        // 待っている間もマウスを動かせるよう、Enigo を解放してから待つ。
+        if sent_keys {
+            thread::sleep(KEY_INTERVAL);
+        }
+    }
     Ok(())
+}
+
+/// `stop` が立つまで、スティックとモーションでマウスとホイールを動かし続ける。
+fn move_cursor(
+    motion: &Mutex<Motion>,
+    enigo: &Mutex<Enigo>,
+    sensitivity: Sensitivity,
+    stop: &AtomicBool,
+) {
+    let Sensitivity { gyro, stick } = sensitivity;
+    let mut wheel_x = Velocity::default();
+    let mut wheel_y = Velocity::default();
+    let mut mouse_x = Velocity::default();
+    let mut mouse_y = Velocity::default();
+
+    while !stop.load(Ordering::Relaxed) {
+        let Motion {
+            left_stick: [lx, ly],
+            right_stick: [rx, ry],
+            gyro: [gy, gz],
+            tilt,
+        } = *lock(motion);
+
+        // スティック分(上に倒すと y が正なので、画面の向きに合わせて反転する)
+        wheel_x.accelerate(deadzone(lx, STICK_DEADZONE) * stick / 16.0);
+        wheel_y.accelerate(-deadzone(ly, STICK_DEADZONE) * stick / 16.0);
+        mouse_x.accelerate(deadzone(rx, STICK_DEADZONE) * stick * 2.0);
+        mouse_y.accelerate(-deadzone(ry, STICK_DEADZONE) * stick * 2.0);
+
+        // モーション分(コントローラーの姿勢に合わせて回転する)
+        let gy = deadzone(gy, GYRO_DEADZONE);
+        let gz = deadzone(gz, GYRO_DEADZONE);
+        let (sin, cos) = tilt.to_radians().sin_cos();
+        let mx = (gz * cos + gy * sin) * gyro / 8.0;
+        let my = (gz * sin - gy * cos) * gyro / 8.0;
+
+        let (dlx, dly) = (wheel_x.step(0.0), wheel_y.step(0.0));
+        let (drx, dry) = (mouse_x.step(mx), mouse_y.step(my));
+
+        {
+            let mut enigo = lock(enigo);
+            // enigo 0.6 は移動量 0 でもスクロールイベントを送るため、0 のときは呼ばない。
+            if dlx != 0.0 {
+                let _ = enigo.scroll(dlx as i32, Axis::Horizontal);
+            }
+            if dly != 0.0 {
+                let _ = enigo.scroll(dly as i32, Axis::Vertical);
+            }
+            let _ = enigo.move_mouse(drx as i32, dry as i32, Coordinate::Rel);
+        }
+
+        thread::sleep(MOUSE_INTERVAL);
+    }
+}
+
+/// 絶対値が `threshold` 未満の値を 0 にする。
+fn deadzone(value: f64, threshold: f64) -> f64 {
+    if value.abs() < threshold { 0.0 } else { value }
 }
