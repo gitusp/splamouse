@@ -1,5 +1,5 @@
 <h3 align="center">
-  <a href="https://github.com/gitusp/splamouse/blob/master/splamouse/README.md">English</a> | 日本語</a>
+  <a href="https://github.com/gitusp/splamouse/blob/master/splamouse/README.md">English</a> | 日本語
 </h3>
 
 # Splamouse
@@ -32,8 +32,8 @@ https://github.com/gitusp/splamouse/assets/2055516/c113f2e3-12b8-4624-8700-a07d4
 | 上                   | ⌘ + v（貼り付け）                 |
 | L-スティック(押す)   | ミドルクリック                    |
 | R-スティック（押す） | Enter                             |
-| 撮影                 | ⌘ + z(やり直し)                   |
-| ホーム               | ⌘ + Shift + z(元に戻す)           |
+| 撮影                 | ⌘ + z(元に戻す)                   |
+| ホーム               | ⌘ + Shift + z(やり直し)           |
 
 ## 使い方
 
