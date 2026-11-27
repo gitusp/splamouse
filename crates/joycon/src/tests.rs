@@ -155,6 +155,7 @@ fn connects_over_bluetooth() {
             subcommand_report(3, 0x10, &[0x20, 0x60, 0, 0, 0x18]),
             subcommand_report(4, 0x10, &[0x26, 0x80, 0, 0, 0x1A]),
             subcommand_report(5, 0x10, &[0x3D, 0x60, 0, 0, 0x12]),
+            subcommand_report(6, 0x10, &[0x10, 0x80, 0, 0, 0x16]),
         ]
     );
 }
@@ -287,6 +288,52 @@ fn uses_the_user_imu_calibration() {
     assert_eq!(imu.gyro, Vec3::default());
     // Negated on the right Joy-Con.
     assert_eq!(imu.accel.x, -(1000.0 * 4.0 / 16383.0));
+}
+
+#[test]
+fn uses_the_user_stick_calibration() {
+    let fake = Fake::new();
+    // Only for the right stick: center (0x700, 0x700), 0x100 below, 0x200 above.
+    let mut user = [0xFF; 22];
+    user[11..13].copy_from_slice(&[0xB2, 0xA1]);
+    user[13..16].copy_from_slice(&encode_pair([0x700, 0x700]));
+    user[16..19].copy_from_slice(&encode_pair([0x100, 0x100]));
+    user[19..22].copy_from_slice(&encode_pair([0x200, 0x200]));
+    fake.state().flash[0x8010..][..22].copy_from_slice(&user);
+    let mut joycon = fake.connect(Model::ProController);
+
+    let mut report = standard(0x30);
+    report[6..9].copy_from_slice(&encode_pair([0xA80, 0x7F0]));
+    report[9..12].copy_from_slice(&encode_pair([0x800, 0x680]));
+    fake.push(report);
+    let report = joycon.read().unwrap();
+    // The factory calibration for the left stick.
+    assert_eq!(report.left_stick, Stick { x: 0.5, y: 0.0 });
+    assert_eq!(report.right_stick, Stick { x: 0.5, y: -0.5 });
+}
+
+#[test]
+fn joy_con_has_one_stick() {
+    for (model, left, right) in [
+        (
+            Model::LeftJoyCon,
+            Stick { x: 1.0, y: 1.0 },
+            Stick::default(),
+        ),
+        (
+            Model::RightJoyCon,
+            Stick::default(),
+            Stick { x: 1.0, y: 1.0 },
+        ),
+    ] {
+        let fake = Fake::new();
+        let mut joycon = fake.connect(model);
+        let mut report = standard(0x30);
+        report[6..12].fill(0xFF);
+        fake.push(report);
+        let report = joycon.read().unwrap();
+        assert_eq!((report.left_stick, report.right_stick), (left, right));
+    }
 }
 
 #[test]
@@ -428,7 +475,7 @@ fn sets_player_lights() {
         .unwrap();
     assert_eq!(
         fake.take_outputs(),
-        [subcommand_report(6, 0x30, &[0b0100_1001])]
+        [subcommand_report(7, 0x30, &[0b0100_1001])]
     );
 }
 

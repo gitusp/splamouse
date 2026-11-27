@@ -11,8 +11,9 @@ use anyhow::Result;
 
 const FACTORY_IMU: u32 = 0x6020;
 const FACTORY_STICKS: u32 = 0x603D;
-/// The user calibration, set from the console, starts with this magic number if there is one.
+const USER_STICKS: u32 = 0x8010;
 const USER_IMU: u32 = 0x8026;
+/// Each user calibration, set from the console, starts with this magic number if there is one.
 const USER_MAGIC: [u8; 2] = [0xB2, 0xA1];
 
 /// Rotation speed of one unit of the raw gyroscope value, at the default ±2000 dps range.
@@ -24,12 +25,31 @@ pub(crate) struct SticksCalibration {
 }
 
 impl SticksCalibration {
-    pub(crate) fn read(link: &mut Link) -> Result<Self> {
+    /// Uses the user calibration of each stick if there is one, and the factory calibration
+    /// otherwise. The stick a Joy-Con doesn't have stays at the center.
+    pub(crate) fn read(link: &mut Link, model: Model) -> Result<Self> {
         let factory: [u8; 18] = link.read_spi(FACTORY_STICKS)?;
+        let user: [u8; 22] = link.read_spi(USER_STICKS)?;
+        let (factory_left, factory_right) = factory.split_at(9);
+        let (user_left, user_right) = user.split_at(11);
         Ok(Self {
-            left: StickCalibration::left(&factory[..9]),
-            right: StickCalibration::right(&factory[9..]),
+            left: match model {
+                Model::RightJoyCon => StickCalibration::NONE,
+                _ => StickCalibration::left(user_or(user_left, factory_left)),
+            },
+            right: match model {
+                Model::LeftJoyCon => StickCalibration::NONE,
+                _ => StickCalibration::right(user_or(user_right, factory_right)),
+            },
         })
+    }
+}
+
+/// The user calibration if it has been set, and `factory` otherwise.
+fn user_or<'a>(user: &'a [u8], factory: &'a [u8]) -> &'a [u8] {
+    match user.split_first_chunk() {
+        Some((&USER_MAGIC, user)) => user,
+        _ => factory,
     }
 }
 
@@ -42,6 +62,13 @@ pub(crate) struct StickCalibration {
 }
 
 impl StickCalibration {
+    /// Always at the center.
+    const NONE: Self = Self {
+        min: [0.0; 2],
+        center: [0.0; 2],
+        max: [0.0; 2],
+    };
+
     /// The left stick's calibration has, in this order, how far the stick goes above the center,
     /// the center, and how far it goes below the center.
     pub(crate) fn left(data: &[u8]) -> Self {
@@ -96,10 +123,7 @@ impl ImuCalibration {
     pub(crate) fn read(link: &mut Link) -> Result<Self> {
         let factory: [u8; 24] = link.read_spi(FACTORY_IMU)?;
         let user: [u8; 26] = link.read_spi(USER_IMU)?;
-        Ok(match user.split_first_chunk() {
-            Some((&USER_MAGIC, user)) => Self::new(user),
-            _ => Self::new(&factory),
-        })
+        Ok(Self::new(user_or(&user, &factory)))
     }
 
     /// `data` has, as 3 values (x, y, z) each, the accelerometer offset and coefficient, then the

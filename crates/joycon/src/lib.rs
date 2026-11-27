@@ -96,7 +96,7 @@ impl JoyCon {
         // Gyroscope and accelerometer
         link.subcommand(subcommand::SET_IMU_MODE, &[1])?;
         let imu = ImuCalibration::read(&mut link)?;
-        let sticks = SticksCalibration::read(&mut link)?;
+        let sticks = SticksCalibration::read(&mut link, model)?;
         Ok(Self {
             link,
             model,
