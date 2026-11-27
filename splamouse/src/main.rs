@@ -463,7 +463,8 @@ fn move_cursor(
 
         {
             let mut enigo = lock(enigo);
-            // enigo 0.6 は移動量 0 でもスクロールイベントを送るため、0 のときは呼ばない。
+            // enigo 0.6 は移動量 0 でもイベントを送るため、0 のときは呼ばない。
+            // (止まっている間もマウスを動かしたことになり、スリープやスクリーンセーバーが効かなくなる)
             if dlx != 0.0 {
                 let _ = enigo.scroll(dlx as i32, Axis::Horizontal);
             }
@@ -483,7 +484,9 @@ fn move_cursor(
                 }
                 None => {
                     glide = None;
-                    let _ = enigo.move_mouse(drx as i32, dry as i32, Coordinate::Rel);
+                    if drx != 0.0 || dry != 0.0 {
+                        let _ = enigo.move_mouse(drx as i32, dry as i32, Coordinate::Rel);
+                    }
                 }
             }
         }
