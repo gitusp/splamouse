@@ -37,7 +37,11 @@ https://github.com/gitusp/splamouse/assets/2055516/4228c0da-a27c-4db2-b749-54f1c
 
 ## How to use
 
-- Connect your controller to your computer via Bluetooth.
+- Connect your controller to your computer.
+    - **USB is recommended for the Pro Controller.** On macOS Sonoma and later, Bluetooth adds noticeable input lag.
+        - Use a cable that supports data transfer. Charge-only cables don't work.
+        - After plugging in the cable, press a button to turn the controller on.
+    - Connect Joy-Cons via Bluetooth.
 - Download the latest binary from [Releases](https://github.com/gitusp/splamouse/releases).
     - There's for Apple Silicon(splamouse-macos-apple_silicon.zip) and for x86_64(splamouse-macos-x86_64.zip) binaries.
 - Double click the downloaded zip to unarchive.
@@ -58,6 +62,8 @@ splamouse --gyro=-3.0 --stick=4.5
 
 ## Tips
 
+- On launch, splamouse prints whether the controller is connected via USB or Bluetooth.
+- If the cursor doesn't move, make sure the terminal app running splamouse has the accessibility permission (System Settings > Privacy & Security > Accessibility).
 - Your controller may lose connection when there's no interaction for a while.
     - Try pushing buttons and wiggling sticks to reconnect.
 - Reconnect your controller and restart this program if the connection problem still remains.

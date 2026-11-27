@@ -1,5 +1,5 @@
-:warning: After Sonoma, Pro Controller has input lag.  
-Currently, I'm investigating the issue.
+:warning: On macOS Sonoma and later, the Pro Controller has input lag over Bluetooth.  
+Connecting it via USB avoids the lag.
 
 # joy
 
