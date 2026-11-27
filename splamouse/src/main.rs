@@ -1,5 +1,7 @@
+mod launch_agent;
+
 use anyhow::{Context, Result};
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use enigo::{
     Axis, Button, Coordinate,
     Direction::{Click, Press, Release},
@@ -15,6 +17,7 @@ use joycon::{
     },
 };
 use std::{
+    io::{self, Write},
     panic::{self, AssertUnwindSafe},
     sync::{
         Mutex, MutexGuard, PoisonError,
@@ -33,7 +36,7 @@ const KEY_INTERVAL: Duration = Duration::from_millis(100);
 /// 対応しているコントローラー。
 /// 充電グリップは joycon クレートが対応しておらず `JoyCon::new` がパニックするので含めない。
 const PRODUCT_IDS: [u16; 3] = [JOYCON_L_BT, JOYCON_R_BT, PRO_CONTROLLER];
-/// コントローラーが見つからないときに探し直す間隔。
+/// コントローラーが見つからないときや、接続が切れたときに探し直す間隔。
 const RETRY_INTERVAL: Duration = Duration::from_secs(1);
 /// ドリフト防止のため、これより小さいスティックの傾きは無視する。
 const STICK_DEADZONE: f64 = 0.2;
@@ -101,10 +104,20 @@ const BINDINGS: [(IsPressed, Action); 18] = {
 
 #[derive(Parser)]
 struct Opts {
-    #[arg(short, long, default_value = "0.0")]
+    #[arg(short, long, default_value = "0.0", global = true)]
     gyro: f64,
-    #[arg(short, long, default_value = "0.0")]
+    #[arg(short, long, default_value = "0.0", global = true)]
     stick: f64,
+    #[command(subcommand)]
+    command: Option<Command>,
+}
+
+#[derive(Subcommand)]
+enum Command {
+    /// Run splamouse in the background now and at every login
+    Install,
+    /// Stop running splamouse in the background
+    Uninstall,
 }
 
 /// 感度の倍率。
@@ -270,6 +283,15 @@ fn main() -> Result<()> {
         return Ok(());
     };
 
+    match opts.command {
+        Some(Command::Install) => return launch_agent::install(opts.gyro, opts.stick),
+        Some(Command::Uninstall) => return launch_agent::uninstall(),
+        None => {}
+    }
+
+    // 接続が中途半端な間は同じパニックが繰り返されるので、パニックも重複を省いてログに出す。
+    panic::set_hook(Box::new(|info| log_status(info.to_string())));
+
     // ⌘+クリックや ⌘+スクロールが効くよう、ボタンとマウスの両スレッドで1つの Enigo を共有して修飾キーの状態を揃える。
     // Enigo は drop 時に送ったイベント数に比例してスリープする(5ms 毎のマウス移動だと 1 時間で約 3 時間)ので、
     // 接続ごとに作り直さず、drop しないよう 'static にして使い回す。
@@ -280,22 +302,40 @@ fn main() -> Result<()> {
         let (device, device_info) = match open_controller(&mut api) {
             Ok(found) => found,
             Err(e) => {
-                eprintln!("{e:#}");
+                log_status(format!("{e:#}"));
                 thread::sleep(RETRY_INTERVAL);
                 continue;
             }
         };
 
-        // NOTE: 接続が中途半端な際、よくパニックする。
-        // パニックやエラーの後は device を捨てて再接続するだけなので、結果は捨て、AssertUnwindSafe でも問題ない。
-        let _ = panic::catch_unwind(AssertUnwindSafe(|| -> Result<()> {
+        // NOTE: 接続が中途半端な際、よくパニックする(内容はパニックフックがログに出す)。
+        // パニックやエラーの後は device を捨てて再接続するだけなので、AssertUnwindSafe でも問題ない。
+        let result = panic::catch_unwind(AssertUnwindSafe(|| -> Result<()> {
             let joycon = JoyCon::new(device, device_info)?;
-            eprintln!(
+            log_status(format!(
                 "Connected via {}",
                 if joycon.is_usb() { "USB" } else { "Bluetooth" }
-            );
+            ));
             run(joycon, enigo, sensitivity)
         }));
+        if let Ok(Err(e)) = result {
+            log_status(format!("Disconnected: {e:#}"));
+        }
+        // コントローラーが見えたまま接続に失敗し続けても CPU を使い切らないよう、待ってから探し直す。
+        thread::sleep(RETRY_INTERVAL);
+    }
+}
+
+/// 状態をログに出す。直前と同じ内容なら出さない。
+/// launchd で常駐させると、未接続の間や接続失敗が続く間にログが同じ行で埋まってしまうため。
+fn log_status(message: impl Into<String>) {
+    static LAST: Mutex<String> = Mutex::new(String::new());
+    let message = message.into();
+    let mut last = lock(&LAST);
+    if *last != message {
+        // パニックフックからも呼ばれるので、書き込みに失敗してもパニックしない writeln! を使う。
+        let _ = writeln!(io::stderr(), "{message}");
+        *last = message;
     }
 }
 

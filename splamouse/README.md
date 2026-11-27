@@ -60,6 +60,23 @@ Launching this app directly from the terminal, you can set the sensitivity by sp
 splamouse --gyro=-3.0 --stick=4.5
 ```
 
+### Start automatically at login
+
+You can keep splamouse running in the background, even while no controller is connected. Register it from the terminal (the sensitivity options are optional):
+
+```sh
+splamouse install --gyro=-3.0 --stick=4.5
+```
+
+- splamouse starts right away and at every login, and picks up the controller whenever it connects.
+- macOS asks for the accessibility permission again, this time for splamouse itself instead of the terminal app. Allow it.
+- Don't run splamouse from the terminal at the same time.
+- Keep the binary where it was when you ran `install`. After moving or updating it, run `splamouse install` again.
+    - After an update, the old accessibility permission may no longer apply. If the cursor doesn't move, remove splamouse from the list with "−" and allow it again.
+- Logs go to `~/Library/Logs/splamouse.log`.
+- To restart it: `launchctl kickstart -k gui/$(id -u)/com.github.gitusp.splamouse`
+- To stop it: `splamouse uninstall`
+
 ## Tips
 
 - On launch, splamouse prints whether the controller is connected via USB or Bluetooth.

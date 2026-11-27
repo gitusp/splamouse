@@ -10,3 +10,4 @@ anyhow = "1.0"
 clap = { version = "4.6", features = ["derive"] }
 enigo = "0.6"
 joycon = { path = "../crates/joycon" }
+libc = "0.2"
