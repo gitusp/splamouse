@@ -21,8 +21,11 @@ const SUBCOMMAND_REPORT_LEN: usize = 49;
 const SUBCOMMAND_ARGS: usize = 11;
 /// Rumble data that doesn't vibrate (320 Hz and 160 Hz at amplitude 0, for both sides).
 const NO_RUMBLE: [u8; 8] = [0x00, 0x01, 0x40, 0x40, 0x00, 0x01, 0x40, 0x40];
-/// The reply to a subcommand comes within this many input reports.
+/// The reply to a subcommand comes within this many input reports...
 const SUBCOMMAND_REPLY_REPORTS: u32 = 10;
+/// ...and within this time, even before the controller sends reports regularly. (In the simple HID
+/// mode it starts in, it only sends a report when a button changes.)
+const SUBCOMMAND_REPLY_TIMEOUT: Duration = Duration::from_secs(1);
 
 /// Every output report has to be padded to this size over USB.
 const USB_PACKET_LEN: usize = 64;
@@ -49,17 +52,15 @@ enum UsbCommand {
 /// The HID device of the controller. Tests use a fake controller instead.
 pub(crate) trait Device {
     /// Reads an input report into `buf` and returns its length, or 0 if none came within
-    /// `timeout`. Waits forever if `timeout` is `None`.
-    fn read(&self, buf: &mut [u8], timeout: Option<Duration>) -> Result<usize>;
+    /// `timeout`.
+    fn read(&self, buf: &mut [u8], timeout: Duration) -> Result<usize>;
     /// Writes an output report and returns how many bytes were written.
     fn write(&self, report: &[u8]) -> Result<usize>;
 }
 
 impl Device for HidDevice {
-    fn read(&self, buf: &mut [u8], timeout: Option<Duration>) -> Result<usize> {
-        let timeout = timeout.map_or(-1, |timeout| {
-            i32::try_from(timeout.as_millis().max(1)).unwrap_or(i32::MAX)
-        });
+    fn read(&self, buf: &mut [u8], timeout: Duration) -> Result<usize> {
+        let timeout = i32::try_from(timeout.as_millis().max(1)).unwrap_or(i32::MAX);
         Ok(self.read_timeout(buf, timeout)?)
     }
 
@@ -140,7 +141,7 @@ impl Link {
         let deadline = Instant::now() + USB_REPLY_TIMEOUT;
         let mut buf = [0; 512];
         while let Some(remaining) = deadline.checked_duration_since(Instant::now()) {
-            let len = self.device.read(&mut buf, Some(remaining))?;
+            let len = self.device.read(&mut buf, remaining)?;
             if len >= 2 && buf[0] == USB_REPLY_ID && buf[1] == command as u8 {
                 return Ok(true);
             }
@@ -165,18 +166,18 @@ impl Link {
         Ok(())
     }
 
-    /// Waits for the next input report.
-    pub(crate) fn recv(&mut self) -> Result<Input> {
+    /// Waits for the next input report until `deadline`. Returns `None` if none came.
+    pub(crate) fn recv(&mut self, deadline: Instant) -> Result<Option<Input>> {
         let mut buf = [0; MAX_INPUT_LEN];
-        loop {
-            let len = self.device.read(&mut buf, None)?;
+        while let Some(remaining) = deadline.checked_duration_since(Instant::now()) {
+            let len = self.device.read(&mut buf, remaining)?;
             // Late replies to the USB-only commands aren't regular input reports.
             if len == 0 || buf[0] == USB_REPLY_ID {
                 continue;
             }
             let id = buf[0];
             if !matches!(id, SUBCOMMAND_REPLY | STANDARD_FULL | STANDARD_FULL_MCU) {
-                return Ok(Input::Other(id));
+                return Ok(Some(Input::Other(id)));
             }
             ensure!(
                 len >= STANDARD_LEN,
@@ -184,8 +185,9 @@ impl Link {
             );
             let mut report = [0; STANDARD_LEN];
             report.copy_from_slice(&buf[..STANDARD_LEN]);
-            return Ok(Input::Standard(report));
+            return Ok(Some(Input::Standard(report)));
         }
+        Ok(None)
     }
 
     /// Sends a subcommand and waits for the controller to accept it.
@@ -226,8 +228,12 @@ impl Link {
         self.counter = (self.counter + 1) & 0xF;
         self.send(&report)?;
 
+        let deadline = Instant::now() + SUBCOMMAND_REPLY_TIMEOUT;
         for _ in 0..SUBCOMMAND_REPLY_REPORTS {
-            if let Input::Standard(input) = self.recv()?
+            let Some(input) = self.recv(deadline)? else {
+                break;
+            };
+            if let Input::Standard(input) = input
                 && input[0] == SUBCOMMAND_REPLY
                 && input[SUBCOMMAND_ID] == id
                 && is_reply(&input[SUBCOMMAND_DATA..])

@@ -5,7 +5,13 @@ use crate::{
     calibration::StickCalibration,
     report::{RawImu, STANDARD_LEN},
 };
-use std::{cell::RefCell, collections::VecDeque, rc::Rc, time::Duration};
+use std::{
+    cell::RefCell,
+    collections::VecDeque,
+    rc::Rc,
+    thread,
+    time::{Duration, Instant},
+};
 
 /// A fake controller that replies to the commands and subcommands, then sends `idle`.
 #[derive(Clone)]
@@ -60,9 +66,11 @@ impl Fake {
 }
 
 impl Device for Fake {
-    fn read(&self, buf: &mut [u8], _timeout: Option<Duration>) -> Result<usize> {
+    fn read(&self, buf: &mut [u8], timeout: Duration) -> Result<usize> {
         let mut state = self.state();
         let Some(report) = state.inputs.pop_front().or_else(|| state.idle.clone()) else {
+            drop(state);
+            thread::sleep(timeout);
             return Ok(0);
         };
         buf[..report.len()].copy_from_slice(&report);
@@ -350,6 +358,32 @@ fn fails_without_reply() {
 }
 
 #[test]
+fn fails_without_reply_or_reports() {
+    let fake = Fake::new();
+    let mut link = fake.link(false);
+    {
+        let mut state = fake.state();
+        state.reply = false;
+        state.idle = None;
+    }
+    let start = Instant::now();
+    let error = link.subcommand(0x30, &[0]).unwrap_err();
+    assert_eq!(error.to_string(), "no reply to subcommand 0x30");
+    assert!(start.elapsed() >= Duration::from_secs(1));
+}
+
+#[test]
+fn fails_when_the_reports_stop() {
+    let fake = Fake::new();
+    let mut joycon = fake.connect(Model::ProController);
+    fake.state().idle = None;
+    let start = Instant::now();
+    let error = joycon.read().unwrap_err();
+    assert_eq!(error.to_string(), "no input report for 1s");
+    assert!(start.elapsed() >= Duration::from_secs(1));
+}
+
+#[test]
 fn fails_when_rejected() {
     let fake = Fake::new();
     let mut link = fake.link(false);
@@ -365,7 +399,7 @@ fn fails_when_rejected() {
 fn fails_on_short_writes() {
     struct Short;
     impl Device for Short {
-        fn read(&self, _: &mut [u8], _: Option<Duration>) -> Result<usize> {
+        fn read(&self, _: &mut [u8], _: Duration) -> Result<usize> {
             Ok(0)
         }
         fn write(&self, report: &[u8]) -> Result<usize> {

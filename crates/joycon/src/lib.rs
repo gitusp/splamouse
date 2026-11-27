@@ -15,8 +15,11 @@ use calibration::{ImuCalibration, SticksCalibration};
 use hidapi::{BusType, DeviceInfo, HidDevice};
 use link::{Device, Input, Link};
 use report::RawReport;
+use std::time::{Duration, Instant};
 
 const NINTENDO_VENDOR_ID: u16 = 0x057E;
+/// The controller sends 60 to 120 reports per second, so it's gone if it sends none for this long.
+const REPORT_TIMEOUT: Duration = Duration::from_secs(1);
 
 /// Subcommands. <https://github.com/dekuNukem/Nintendo_Switch_Reverse_Engineering/blob/master/bluetooth_hid_subcommands_notes.md>
 mod subcommand {
@@ -122,9 +125,10 @@ impl JoyCon {
 
     /// Waits for the next input report.
     pub fn read(&mut self) -> Result<Report> {
-        let raw = match self.link.recv()? {
-            Input::Standard(report) => RawReport::parse(&report),
-            Input::Other(id) => anyhow::bail!("unexpected input report {id:#04x}"),
+        let raw = match self.link.recv(Instant::now() + REPORT_TIMEOUT)? {
+            Some(Input::Standard(report)) => RawReport::parse(&report),
+            Some(Input::Other(id)) => anyhow::bail!("unexpected input report {id:#04x}"),
+            None => anyhow::bail!("no input report for {REPORT_TIMEOUT:?}"),
         };
         Ok(Report {
             buttons: raw.buttons,
