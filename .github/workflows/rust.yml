@@ -23,7 +23,13 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
       - uses: Swatinem/rust-cache@v2
 
+      - name: Check formatting
+        run: cargo fmt --all --check
+      - name: Run clippy
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - name: ⚙️ Run tests
         run: cargo test --verbose --release --workspace --locked
