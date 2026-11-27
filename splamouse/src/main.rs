@@ -56,18 +56,14 @@ enum Action {
 }
 
 impl Action {
-    fn send(self, enigo: &mut Enigo, pressed: bool) -> InputResult<()> {
-        match (self, pressed) {
-            (Self::Keys(keys), true) => keys.iter().try_for_each(|&key| enigo.key(key, Press)),
-            (Self::Keys(keys), false) => keys
-                .iter()
-                .rev()
-                .try_for_each(|&key| enigo.key(key, Release)),
-            (Self::Hold(button), true) => enigo.button(button, Press),
-            (Self::Hold(button), false) => enigo.button(button, Release),
-            (Self::ClickOnRelease(_), true) => Ok(()),
-            (Self::ClickOnRelease(button), false) => enigo.button(button, Click),
-        }
+    /// 押している間、`key` を押したままにするか。
+    fn holds_key(self, key: Key) -> bool {
+        matches!(self, Self::Keys(keys) if keys.contains(&key))
+    }
+
+    /// 押している間、`button` を押したままにするか。
+    fn holds_button(self, button: Button) -> bool {
+        matches!(self, Self::Hold(held) if held == button)
     }
 }
 
@@ -162,6 +158,99 @@ impl Velocity {
     }
 }
 
+/// 押しているボタン。
+/// drop 時(切断・エラー・パニック)には、ボタンで押したままのキーとマウスボタンを離す。
+/// ⌘ などが残ると、再接続後のクリック等にも付いてしまう。
+struct Held<'a> {
+    enigo: &'a Mutex<Enigo>,
+    /// `BINDINGS` の各ボタンを押しているか
+    pressed: [bool; BINDINGS.len()],
+}
+
+impl<'a> Held<'a> {
+    fn new(enigo: &'a Mutex<Enigo>) -> Self {
+        Self {
+            enigo,
+            pressed: [false; BINDINGS.len()],
+        }
+    }
+
+    /// 押した・離したボタンの操作を送る。キーを送ったら true を返す。
+    fn update(&mut self, status: ButtonsStatus) -> InputResult<bool> {
+        let mut enigo = lock(self.enigo);
+        let mut sent_keys = false;
+        for (i, (is_pressed, action)) in BINDINGS.iter().enumerate() {
+            let pressed = is_pressed(&status);
+            if pressed == self.pressed[i] {
+                continue;
+            }
+            if pressed {
+                self.press(&mut enigo, i)?;
+            } else {
+                self.release(&mut enigo, i)?;
+            }
+            sent_keys |= matches!(action, Action::Keys(_));
+        }
+        Ok(sent_keys)
+    }
+
+    fn press(&mut self, enigo: &mut Enigo, i: usize) -> InputResult<()> {
+        match BINDINGS[i].1 {
+            Action::Keys(keys) => keys.iter().try_for_each(|&key| enigo.key(key, Press))?,
+            Action::Hold(button) => enigo.button(button, Press)?,
+            Action::ClickOnRelease(_) => {}
+        }
+        self.pressed[i] = true;
+        Ok(())
+    }
+
+    /// 他のボタンでも押しているキーやマウスボタンは、離さない・クリックしない。
+    /// (X(⌘)を押したまま A(⌘ + →)を離したときの ⌘ や、ZL でドラッグ中に ZR を離したときの左ボタンなど)
+    fn release(&mut self, enigo: &mut Enigo, i: usize) -> InputResult<()> {
+        self.pressed[i] = false;
+        match BINDINGS[i].1 {
+            Action::Keys(keys) => {
+                for &key in keys.iter().rev() {
+                    if !self.any_pressed(|action| action.holds_key(key)) {
+                        enigo.key(key, Release)?;
+                    }
+                }
+            }
+            Action::Hold(button) => {
+                if !self.any_pressed(|action| action.holds_button(button)) {
+                    enigo.button(button, Release)?;
+                }
+            }
+            Action::ClickOnRelease(button) => {
+                if !self.any_pressed(|action| action.holds_button(button)) {
+                    enigo.button(button, Click)?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// 押しているボタンのどれかの操作が `f` を満たすか。
+    fn any_pressed(&self, f: impl Fn(Action) -> bool) -> bool {
+        BINDINGS
+            .iter()
+            .zip(self.pressed)
+            .any(|(&(_, action), pressed)| pressed && f(action))
+    }
+}
+
+impl Drop for Held<'_> {
+    fn drop(&mut self) {
+        let mut enigo = lock(self.enigo);
+        for (i, (_, action)) in BINDINGS.iter().enumerate() {
+            // 切断などで離したことになるボタンでは、クリックしない。
+            if self.pressed[i] && !matches!(action, Action::ClickOnRelease(_)) {
+                let _ = self.release(&mut enigo, i);
+            }
+        }
+    }
+}
+
 /// drop されたとき(パニックの巻き戻しも含む)にフラグを立てる。
 struct SetOnDrop<'a>(&'a AtomicBool);
 
@@ -206,7 +295,6 @@ fn main() -> Result<()> {
             );
             run(joycon, enigo, sensitivity)
         }));
-        release_held_keys(enigo);
     }
 }
 
@@ -247,15 +335,6 @@ fn find_controller(api: &HidApi) -> Option<&DeviceInfo> {
 /// ロックを取る。他のスレッドがパニックしても中身は使い続けられるので、ポイズンは無視する。
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
-}
-
-/// 押しっぱなしのキーを離す。切断時に ⌘ などが残ると、再接続後のクリック等にも付いてしまう。
-fn release_held_keys(enigo: &Mutex<Enigo>) {
-    let mut enigo = lock(enigo);
-    let (keys, _) = enigo.held();
-    for key in keys {
-        let _ = enigo.key(key, Release);
-    }
 }
 
 /// 接続したコントローラーでマウスを操作する。切断などで読めなくなったら返る。
@@ -333,22 +412,10 @@ fn read_controller(
 
 /// 受け取ったボタンの状態から、押した・離したボタンの操作を送る。
 fn send_buttons(buttons: Receiver<ButtonsStatus>, enigo: &Mutex<Enigo>) -> Result<()> {
-    let mut held = [false; BINDINGS.len()];
+    let mut held = Held::new(enigo);
     for status in buttons {
-        let mut sent_keys = false;
-        {
-            let mut enigo = lock(enigo);
-            for ((is_pressed, action), held) in BINDINGS.iter().zip(&mut held) {
-                let pressed = is_pressed(&status);
-                if pressed != *held {
-                    action.send(&mut enigo, pressed)?;
-                    *held = pressed;
-                    sent_keys |= matches!(action, Action::Keys(_));
-                }
-            }
-        }
-        // 待っている間もマウスを動かせるよう、Enigo を解放してから待つ。
-        if sent_keys {
+        // update が Enigo を解放してから待つので、待っている間もマウスは動く。
+        if held.update(status)? {
             thread::sleep(KEY_INTERVAL);
         }
     }
