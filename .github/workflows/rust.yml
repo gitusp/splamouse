@@ -1,18 +1,8 @@
-name: Build, test and doc
+name: Build and test
 
 on:
-# At the moment, this doesn’t work due to a bug with GitHub:
-# <https://github.community/t/support-for-yaml-anchors/16128>
-# Once that bug is fixed, this version should be used.
-  #push: &push_settings
-    #paths:
-      #- '**/Cargo.lock'
-      #- '**/Cargo.toml'
-      #- '**.rs'
-      #- '.github/workflows/rust.yml'
-  #pull_request: *push_settings
-# In the meantime, we can just repeat ourselves.
   push:
+    branches: [master]
     paths:
       - '**/Cargo.lock'
       - '**/Cargo.toml'
@@ -27,57 +17,13 @@ on:
 
 jobs:
   build:
-    strategy:
-      fail-fast: false
-      matrix:
-        platform: [linux, windows, macos]
-        include:
-          - platform: linux
-            os: ubuntu-latest
-          - platform: windows
-            os: windows-latest
-          - platform: macos
-            os: macos-latest
-    runs-on: ${{ matrix.os }}
+    # splamouse only supports macOS.
+    runs-on: macos-latest
 
     steps:
-      - uses: actions/checkout@v2
-      - uses: actions-rs/toolchain@v1
-        with:
-          toolchain: stable
-      - uses: actions/cache@v2
-        id: cache-cargo
-        with:
-          path: |
-            ~/.cargo/bin/
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-            target
-          key: ${{ runner.os }}-cargo-v1-${{ hashFiles('**/Cargo.lock') }}
-
-      - name: ⚙️ Install OS dependencies
-        if: matrix.platform == 'linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install libusb-1.0-0-dev libbluetooth-dev libudev-dev
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
 
       - name: ⚙️ Run tests
-        uses: actions-rs/cargo@v1
-        with:
-          command: test
-          args: --verbose --release --workspace
-
-      - name: 🔨 Build Documentation
-        uses: actions-rs/cargo@v1
-        if: matrix.platform == 'linux'
-        with:
-          command: doc
-          args: --workspace  --no-deps
-
-      - name: ☁️ Deploy Documentation
-        uses: peaceiris/actions-gh-pages@v3
-        if: matrix.platform == 'linux' && github.event_name == 'push' && github.ref == 'refs/heads/master'
-        with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_dir: ./target/doc
+        run: cargo test --verbose --release --workspace --locked
