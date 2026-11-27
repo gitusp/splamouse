@@ -39,9 +39,11 @@ fn main() -> Result<()> {
     let mut api = HidApi::new()?;
     loop {
         api.refresh_devices()?;
+        // USB と Bluetooth の両方で見えている場合は USB を優先する(USB だけ interface_number >= 0)。
         if let Some(device_info) = api
             .device_list()
-            .find(|x| x.vendor_id() == NINTENDO_VENDOR_ID && HID_IDS.contains(&x.product_id()))
+            .filter(|x| x.vendor_id() == NINTENDO_VENDOR_ID && HID_IDS.contains(&x.product_id()))
+            .min_by_key(|x| x.interface_number() < 0)
         {
             let device = device_info
                 .open_device(&api)
@@ -50,6 +52,10 @@ fn main() -> Result<()> {
             // NOTE: 接続が中途半端な際、ここでよくパニックする。
             let _ = std::panic::catch_unwind(|| -> Result<()> {
                 let joycon = JoyCon::new(device, device_info.clone())?;
+                eprintln!(
+                    "Connected via {}",
+                    if joycon.is_usb() { "USB" } else { "Bluetooth" }
+                );
                 hid_main(joycon, gyro, stick).context("error running the command")?;
                 Ok(())
             });
