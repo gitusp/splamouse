@@ -10,13 +10,8 @@ use enigo::{
     Enigo, InputResult, Keyboard, Mouse, NewConError, Settings,
 };
 use joycon::{
-    IMU, JoyCon,
+    BatteryLevel, Button, IMU_SAMPLE_DURATION, JoyCon, PlayerLight,
     hidapi::{BusType, DeviceInfo, HidApi, HidDevice},
-    joycon_sys::{
-        JOYCON_L_BT, JOYCON_R_BT, NINTENDO_VENDOR_ID, PRO_CONTROLLER,
-        input::{BatteryLevel, ButtonsStatus},
-        light::{self, PlayerLight},
-    },
 };
 use std::{
     io::{self, Write},
@@ -35,9 +30,6 @@ const MOUSE_INTERVAL: Duration = Duration::from_millis(5);
 /// キーを送った後、次のボタン入力を送るまで待つ時間。
 /// キー入力の切れ目で待たないと、マシンスペックによって順番が前後してしまう。
 const KEY_INTERVAL: Duration = Duration::from_millis(100);
-/// 対応しているコントローラー。
-/// 充電グリップは joycon クレートが対応しておらず `JoyCon::new` がパニックするので含めない。
-const PRODUCT_IDS: [u16; 3] = [JOYCON_L_BT, JOYCON_R_BT, PRO_CONTROLLER];
 /// コントローラーが見つからないときや、接続が切れたときに探し直す間隔。
 const RETRY_INTERVAL: Duration = Duration::from_secs(1);
 /// ドリフト防止のため、これより小さいスティックの傾きは無視する。
@@ -48,32 +40,29 @@ const GYRO_DEADZONE: f64 = 2.0;
 /// ポインタを画面中央へ戻すアニメーションの長さ(MOUSE_INTERVAL × 40 = 200ms)。
 const GLIDE_STEPS: u32 = 40;
 
-/// ボタンが押されているか。
-type IsPressed = fn(&ButtonsStatus) -> bool;
-
 const BUTTON_COUNT: usize = 18;
 
 /// ボタンと、設定で割り当てた操作の対応。同時に変化したボタンはこの順に送る。
-fn bindings(buttons: &Buttons) -> [(IsPressed, &Action); BUTTON_COUNT] {
+fn bindings(buttons: &Buttons) -> [(Button, &Action); BUTTON_COUNT] {
     [
-        (|b| b.right.a(), &buttons.a),
-        (|b| b.right.b(), &buttons.b),
-        (|b| b.middle.minus(), &buttons.minus),
-        (|b| b.middle.plus(), &buttons.plus),
-        (|b| b.left.left(), &buttons.left),
-        (|b| b.left.right(), &buttons.right),
-        (|b| b.left.down(), &buttons.down),
-        (|b| b.left.up(), &buttons.up),
-        (|b| b.middle.home(), &buttons.home),
-        (|b| b.middle.capture(), &buttons.capture),
-        (|b| b.middle.lstick(), &buttons.lstick),
-        (|b| b.middle.rstick(), &buttons.rstick),
-        (|b| b.right.x(), &buttons.x),
-        (|b| b.right.y(), &buttons.y),
-        (|b| b.right.zr(), &buttons.zr),
-        (|b| b.left.l(), &buttons.l),
-        (|b| b.right.r(), &buttons.r),
-        (|b| b.left.zl(), &buttons.zl),
+        (Button::A, &buttons.a),
+        (Button::B, &buttons.b),
+        (Button::Minus, &buttons.minus),
+        (Button::Plus, &buttons.plus),
+        (Button::Left, &buttons.left),
+        (Button::Right, &buttons.right),
+        (Button::Down, &buttons.down),
+        (Button::Up, &buttons.up),
+        (Button::Home, &buttons.home),
+        (Button::Capture, &buttons.capture),
+        (Button::LStick, &buttons.lstick),
+        (Button::RStick, &buttons.rstick),
+        (Button::X, &buttons.x),
+        (Button::Y, &buttons.y),
+        (Button::ZR, &buttons.zr),
+        (Button::L, &buttons.l),
+        (Button::R, &buttons.r),
+        (Button::ZL, &buttons.zl),
     ]
 }
 
@@ -132,7 +121,7 @@ impl Velocity {
 /// ⌘ などが残ると、再接続後のクリック等にも付いてしまう。
 struct Held<'a> {
     enigo: &'a Mutex<Enigo>,
-    bindings: [(IsPressed, &'a Action); BUTTON_COUNT],
+    bindings: [(Button, &'a Action); BUTTON_COUNT],
     /// 中央へ戻す要求(マウスのスレッドが受け取る)
     center: &'a AtomicBool,
     /// `bindings` の各ボタンを押しているか
@@ -150,12 +139,12 @@ impl<'a> Held<'a> {
     }
 
     /// 押した・離したボタンの操作を送る。キーを送ったら true を返す。
-    fn update(&mut self, status: ButtonsStatus) -> InputResult<bool> {
+    fn update(&mut self, buttons: joycon::Buttons) -> InputResult<bool> {
         let mut enigo = lock(self.enigo);
         let mut sent_keys = false;
         for i in 0..BUTTON_COUNT {
-            let (is_pressed, action) = self.bindings[i];
-            let pressed = is_pressed(&status);
+            let (button, action) = self.bindings[i];
+            let pressed = buttons.is_pressed(button);
             if pressed == self.pressed[i] {
                 continue;
             }
@@ -244,7 +233,7 @@ fn main() -> Result<()> {
         None => {}
     }
 
-    // 接続が中途半端な間は同じパニックが繰り返されるので、パニックも重複を省いてログに出す。
+    // 想定外のパニックが再接続のたびに繰り返されることもあるので、パニックも重複を省いてログに出す。
     panic::set_hook(Box::new(|info| log_status(info.to_string())));
 
     // 設定ファイルに誤りがあれば、直されるまで待つ。
@@ -275,10 +264,10 @@ fn main() -> Result<()> {
             }
         };
 
-        // NOTE: 接続が中途半端な際、よくパニックする(内容はパニックフックがログに出す)。
+        // 接続の失敗や切断はエラーで返るが、想定外のパニックでも止まらず再接続する(内容はパニックフックがログに出す)。
         // パニックやエラーの後は device を捨てて再接続するだけなので、AssertUnwindSafe でも問題ない。
         let result = panic::catch_unwind(AssertUnwindSafe(|| -> Result<()> {
-            let joycon = JoyCon::new(device, device_info)?;
+            let joycon = JoyCon::new(device, &device_info)?;
             log_status(format!(
                 "Connected via {}",
                 if joycon.is_usb() { "USB" } else { "Bluetooth" }
@@ -339,7 +328,7 @@ fn open_controller(api: &mut HidApi) -> Result<(HidDevice, DeviceInfo)> {
         .context("Failed to list the HID devices")?;
     let info = api
         .device_list()
-        .filter(|x| x.vendor_id() == NINTENDO_VENDOR_ID && PRODUCT_IDS.contains(&x.product_id()))
+        .filter(|x| joycon::is_supported(x))
         .min_by_key(|x| !matches!(x.bus_type(), BusType::Usb))
         .context("No device found")?;
     let device = info.open_device(api).with_context(|| {
@@ -358,21 +347,17 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 
 /// 接続したコントローラーでマウスを操作する。切断などで読めなくなったら返る。
 fn run(mut joycon: JoyCon, enigo: &Mutex<Enigo>, config: &config::Config) -> Result<()> {
-    let battery_level = joycon.tick()?.info.battery_level();
-
-    joycon.set_player_light(light::PlayerLights::new(
-        (battery_level >= BatteryLevel::Full).into(),
-        (battery_level >= BatteryLevel::Medium).into(),
-        (battery_level >= BatteryLevel::Low).into(),
-        if battery_level >= BatteryLevel::Low {
+    let battery = joycon.read()?.battery;
+    joycon.set_player_lights([
+        (battery >= BatteryLevel::Full).into(),
+        (battery >= BatteryLevel::Medium).into(),
+        (battery >= BatteryLevel::Low).into(),
+        if battery >= BatteryLevel::Low {
             PlayerLight::On
         } else {
             PlayerLight::Blinking
         },
-    ))?;
-
-    joycon.enable_imu()?;
-    joycon.load_calibration()?;
+    ])?;
 
     // ボタンを送った後に待つ間も、コントローラーの読み取りとマウスの移動が止まらないよう別スレッドにする。
     let motion = Mutex::new(Motion::default());
@@ -400,11 +385,11 @@ fn run(mut joycon: JoyCon, enigo: &Mutex<Enigo>, config: &config::Config) -> Res
 fn read_controller(
     joycon: &mut JoyCon,
     motion: &Mutex<Motion>,
-    buttons: Sender<ButtonsStatus>,
+    buttons: Sender<joycon::Buttons>,
 ) -> Result<()> {
     let mut latest = Motion::default();
     loop {
-        let report = joycon.tick()?;
+        let report = joycon.read()?;
 
         latest.left_stick = [report.left_stick.x, report.left_stick.y];
         latest.right_stick = [report.right_stick.x, report.right_stick.y];
@@ -414,7 +399,7 @@ fn read_controller(
             // コントローラーの姿勢(加速度センサでドリフト修正)
             let accel_tilt = (frame.accel.y / frame.accel.z).atan().to_degrees();
             latest.tilt =
-                (latest.tilt - frame.gyro.x * IMU::SAMPLE_DURATION) * 0.95 + accel_tilt * 0.05;
+                (latest.tilt - frame.gyro.x * IMU_SAMPLE_DURATION) * 0.95 + accel_tilt * 0.05;
         }
         *lock(motion) = latest;
 
@@ -425,10 +410,10 @@ fn read_controller(
 }
 
 /// 受け取ったボタンの状態から、押した・離したボタンの操作を送る。
-fn send_buttons(buttons: Receiver<ButtonsStatus>, mut held: Held) -> Result<()> {
-    for status in buttons {
+fn send_buttons(buttons: Receiver<joycon::Buttons>, mut held: Held) -> Result<()> {
+    for pressed in buttons {
         // update が Enigo を解放してから待つので、待っている間もマウスは動く。
-        if held.update(status)? {
+        if held.update(pressed)? {
             thread::sleep(KEY_INTERVAL);
         }
     }
