@@ -5,19 +5,11 @@ Connecting it via USB avoids the lag.
 
 Fork of [Yamakaky/joy](https://github.com/Yamakaky/joy) that maintains `splamouse` and the Nintendo Switch controller libraries it depends on.
 
-## External dependencies
-
-On Linux, you'll need `libusb`, `libbluetooth` and `libudev`. On Ubuntu, you can install these by running:
-
-```sh
-sudo apt-get install libusb-1.0-0-dev libbluetooth-dev libudev-dev
-```
-
 ## Tools
 
-The tools can be run with `cargo run --bin <tool>`.
+- [`splamouse`](splamouse/README.md): mouse emulator like Splatoon (macOS only).
 
-- [`splamouse`](splamouse/README.md): mouse emulator like Splatoon.
+To run it from source: `cargo run --release --bin splamouse`.
 
 ## Libraries
 
