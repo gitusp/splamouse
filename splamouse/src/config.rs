@@ -134,12 +134,11 @@ fn parse_mouse_button(name: &str) -> Result<Button, String> {
     Ok(match name.trim() {
         "left" => Button::Left,
         "right" => Button::Right,
-        "middle" => Button::Middle,
         "back" => Button::Back,
         "forward" => Button::Forward,
         _ => {
             return Err(format!(
-                "unknown mouse button `{name}` (expected left, right, middle, back or forward)"
+                "unknown mouse button `{name}` (expected left, right, back or forward)"
             ));
         }
     })

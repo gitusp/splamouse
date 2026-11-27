@@ -1,5 +1,6 @@
 mod config;
 mod launch_agent;
+mod motion;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
@@ -10,8 +11,12 @@ use enigo::{
     Enigo, InputResult, Keyboard, Mouse, NewConError, Settings,
 };
 use joycon::{
-    BatteryLevel, Button, IMU_SAMPLE_DURATION, JoyCon, PlayerLight,
+    BatteryLevel, Button, JoyCon, PlayerLight,
     hidapi::{BusType, DeviceInfo, HidApi, HidDevice},
+};
+use motion::{
+    GYRO_PIXELS_PER_DEGREE, MAX_INPUT_GAP, Motion, Tracker, Velocity, radial_deadzone,
+    snapped_deadzone,
 };
 use std::{
     io::{self, Write},
@@ -22,20 +27,17 @@ use std::{
         mpsc::{self, Receiver, Sender},
     },
     thread,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 /// マウスとホイールを動かす間隔(リフレッシュレートより速い)。
+/// 動かす量は実際に経った時間から計算するので、sleep が長引いても速さは変わらない。
 const MOUSE_INTERVAL: Duration = Duration::from_millis(5);
 /// キーを送った後、次のボタン入力を送るまで待つ時間。
 /// キー入力の切れ目で待たないと、マシンスペックによって順番が前後してしまう。
 const KEY_INTERVAL: Duration = Duration::from_millis(100);
 /// コントローラーが見つからないときや、接続が切れたときに探し直す間隔。
 const RETRY_INTERVAL: Duration = Duration::from_secs(1);
-/// ドリフト防止のため、これより小さいスティックの傾きは無視する。
-const STICK_DEADZONE: f64 = 0.2;
-/// ドリフト防止のため、これより小さいモーション(角速度)は無視する。
-const GYRO_DEADZONE: f64 = 2.0;
 
 /// ポインタを画面中央へ戻すアニメーションの長さ(MOUSE_INTERVAL × 40 = 200ms)。
 const GLIDE_STEPS: u32 = 40;
@@ -78,42 +80,6 @@ enum Command {
     Install,
     /// Stop running splamouse in the background
     Uninstall,
-}
-
-/// センサーから読んだ最新の値。
-#[derive(Clone, Copy, Default)]
-struct Motion {
-    /// L スティックの傾き (x, y)
-    left_stick: [f64; 2],
-    /// R スティックの傾き (x, y)
-    right_stick: [f64; 2],
-    /// ジャイロの角速度 (y, z)
-    gyro: [f64; 2],
-    /// コントローラーの姿勢(度)
-    tilt: f64,
-}
-
-/// スティックで動かす 1 方向の速度。
-#[derive(Default)]
-struct Velocity {
-    speed: f64,
-    /// 整数に丸めた端数(次回に持ち越す)
-    remainder: f64,
-}
-
-impl Velocity {
-    /// スティックの入力で加速する。入力が無くなっても少しずつ減速する。
-    fn accelerate(&mut self, input: f64) {
-        self.speed = (self.speed + input) * 0.9;
-    }
-
-    /// 今回の移動量として、速度に `extra` を足して整数に丸めた値を返す。
-    fn step(&mut self, extra: f64) -> f64 {
-        let distance = self.speed + extra + self.remainder;
-        let rounded = distance.round();
-        self.remainder = distance - rounded;
-        rounded
-    }
 }
 
 /// 押しているボタン。
@@ -387,21 +353,10 @@ fn read_controller(
     motion: &Mutex<Motion>,
     buttons: Sender<joycon::Buttons>,
 ) -> Result<()> {
-    let mut latest = Motion::default();
+    let mut tracker = Tracker::default();
     loop {
         let report = joycon.read()?;
-
-        latest.left_stick = [report.left_stick.x, report.left_stick.y];
-        latest.right_stick = [report.right_stick.x, report.right_stick.y];
-        // 遅れて届いたサブコマンドの応答などモーションの無いレポートでは、前回の値を使い続ける。
-        for frame in report.imu.iter().flatten() {
-            latest.gyro = [frame.gyro.y, frame.gyro.z];
-            // コントローラーの姿勢(加速度センサでドリフト修正)
-            let accel_tilt = (frame.accel.y / frame.accel.z).atan().to_degrees();
-            latest.tilt =
-                (latest.tilt - frame.gyro.x * IMU_SAMPLE_DURATION) * 0.95 + accel_tilt * 0.05;
-        }
-        *lock(motion) = latest;
+        tracker.update(&mut lock(motion), &report, Instant::now());
 
         buttons
             .send(report.buttons)
@@ -429,41 +384,44 @@ fn move_cursor(
     center: &AtomicBool,
     stop: &AtomicBool,
 ) {
-    let (gyro, stick) = (sensitivity.gyro_factor(), sensitivity.stick_factor());
+    // モーションは 1 度回したときのピクセル数にしておく。
+    let gyro = sensitivity.gyro_factor() * GYRO_PIXELS_PER_DEGREE;
+    let stick = sensitivity.stick_factor();
     let mut wheel_x = Velocity::default();
     let mut wheel_y = Velocity::default();
     let mut mouse_x = Velocity::default();
     let mut mouse_y = Velocity::default();
     // 中央へ戻している最中のアニメーション
     let mut glide: Option<Glide> = None;
+    let mut last = Instant::now();
 
     while !stop.load(Ordering::Relaxed) {
-        let Motion {
-            left_stick: [lx, ly],
-            right_stick: [rx, ry],
-            gyro: [gy, gz],
-            tilt,
-        } = *lock(motion);
+        // 前回から経った時間(止められていた後に、一度に大きく動かないよう上限を設ける)
+        let now = Instant::now();
+        let elapsed = now
+            .saturating_duration_since(last)
+            .min(MAX_INPUT_GAP)
+            .as_secs_f64();
+        last = now;
+        let ([left, right], [turn_x, turn_y]) = {
+            let mut motion = lock(motion);
+            (motion.sticks(now), motion.take_turn(now, elapsed))
+        };
 
         // スティック分(上に倒すと y が正なので、画面の向きに合わせて反転する)
-        wheel_x.accelerate(deadzone(lx, STICK_DEADZONE) * stick / 16.0);
-        wheel_y.accelerate(-deadzone(ly, STICK_DEADZONE) * stick / 16.0);
-        mouse_x.accelerate(deadzone(rx, STICK_DEADZONE) * stick * 2.0);
-        mouse_y.accelerate(-deadzone(ry, STICK_DEADZONE) * stick * 2.0);
-
-        // モーション分(コントローラーの姿勢に合わせて回転する)
-        let gy = deadzone(gy, GYRO_DEADZONE);
-        let gz = deadzone(gz, GYRO_DEADZONE);
-        let (sin, cos) = tilt.to_radians().sin_cos();
-        let mx = (gz * cos + gy * sin) * gyro / 8.0;
-        let my = (gz * sin - gy * cos) * gyro / 8.0;
-
-        let (dlx, dly) = (wheel_x.step(0.0), wheel_y.step(0.0));
-        let (drx, dry) = (mouse_x.step(mx), mouse_y.step(my));
+        // どちらも斜めに動かせるが、ホイールは縦横の近くではその向きにそろえる。
+        let [lx, ly] = snapped_deadzone(left);
+        let [rx, ry] = radial_deadzone(right);
+        let dlx = wheel_x.step(lx * stick / 16.0, elapsed, 0.0);
+        let dly = wheel_y.step(-ly * stick / 16.0, elapsed, 0.0);
+        // モーション分(読み取りスレッドで、コントローラーの姿勢に合わせて回してある)
+        let drx = mouse_x.step(rx * stick * 2.0, elapsed, turn_x * gyro);
+        let dry = mouse_y.step(-ry * stick * 2.0, elapsed, turn_y * gyro);
 
         {
             let mut enigo = lock(enigo);
-            // enigo 0.6 は移動量 0 でもスクロールイベントを送るため、0 のときは呼ばない。
+            // enigo 0.6 は移動量 0 でもイベントを送るため、0 のときは呼ばない。
+            // (止まっている間もマウスを動かしたことになり、スリープやスクリーンセーバーが効かなくなる)
             if dlx != 0.0 {
                 let _ = enigo.scroll(dlx as i32, Axis::Horizontal);
             }
@@ -483,7 +441,9 @@ fn move_cursor(
                 }
                 None => {
                     glide = None;
-                    let _ = enigo.move_mouse(drx as i32, dry as i32, Coordinate::Rel);
+                    if drx != 0.0 || dry != 0.0 {
+                        let _ = enigo.move_mouse(drx as i32, dry as i32, Coordinate::Rel);
+                    }
                 }
             }
         }
@@ -525,9 +485,4 @@ impl Iterator for Glide {
         let lerp = |from: f64, to: f64| (from + (to - from) * eased).round() as i32;
         Some((lerp(self.from.0, self.to.0), lerp(self.from.1, self.to.1)))
     }
-}
-
-/// 絶対値が `threshold` 未満の値を 0 にする。
-fn deadzone(value: f64, threshold: f64) -> f64 {
-    if value.abs() < threshold { 0.0 } else { value }
 }

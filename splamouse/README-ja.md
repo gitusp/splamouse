@@ -63,7 +63,7 @@ left = "ctrl+shift+tab" # 前のタブ
 right = "ctrl+tab"      # 次のタブ
 down = "cmd+c"          # コピー
 up = "cmd+v"            # 貼り付け
-lstick = "hold:middle"  # ミドルクリック(L-スティックを押す)
+lstick = "none"
 rstick = "enter"        # R-スティックを押す
 capture = "cmd+z"       # 元に戻す
 home = "cmd+shift+z"    # やり直し
@@ -80,7 +80,7 @@ home = "cmd+shift+z"    # やり直し
 | `"none"`             | 何もしない(書かなかった場合と同じ)                |
 
 - キー: `cmd` `shift` `ctrl` `alt`(`opt`)、`a`〜`z` `0`〜`9` と記号(US 配列での位置のキーが押されます)、`left` `right` `up` `down` `enter` `tab` `space` `esc` `backspace`(⌫) `delete`(⌦) `home` `end` `pageup` `pagedown` `f1`〜`f20`
-- マウスボタン: `left` `right` `middle` `back` `forward`
+- マウスボタン: `left` `right` `back` `forward`
 
 設定ファイルは起動時に読み込みます。誤りがあると、誤りの箇所を表示して、直されるまで待ちます。
 

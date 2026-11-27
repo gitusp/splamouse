@@ -63,7 +63,7 @@ left = "ctrl+shift+tab" # previous tab
 right = "ctrl+tab"      # next tab
 down = "cmd+c"          # copy
 up = "cmd+v"            # paste
-lstick = "hold:middle"  # middle click (press the L-stick)
+lstick = "none"
 rstick = "enter"        # press the R-stick
 capture = "cmd+z"       # undo
 home = "cmd+shift+z"    # redo
@@ -80,7 +80,7 @@ The values you can bind:
 | `"none"`                 | Do nothing (same as not writing it)                           |
 
 - Keys: `cmd` `shift` `ctrl` `alt` (`opt`), `a`-`z` `0`-`9` and symbols (sent as the key at that position on the US layout), `left` `right` `up` `down` `enter` `tab` `space` `esc` `backspace` (⌫) `delete` (⌦) `home` `end` `pageup` `pagedown` `f1`-`f20`
-- Mouse buttons: `left` `right` `middle` `back` `forward`
+- Mouse buttons: `left` `right` `back` `forward`
 
 splamouse reads the config file on launch. If it has an error, splamouse shows where it is and waits until it's fixed.
 
