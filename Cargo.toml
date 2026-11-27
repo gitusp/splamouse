@@ -1,16 +1,9 @@
 [workspace]
 resolver = "2"
 members = [
-    "crates/dualshock-sys",
-    "crates/dualshock",
-    "crates/hid-gamepad",
     "crates/hid-gamepad-sys",
     "crates/hid-gamepad-types",
     "crates/joycon-sys",
     "crates/joycon",
-    # removed for huge number of deps
-    #"joy-infrared",
-    "joy-music",
-    "joytk",
     "splamouse",
 ]
