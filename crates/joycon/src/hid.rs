@@ -1,4 +1,5 @@
 use std::convert::TryInto;
+use std::time::{Duration, Instant};
 
 use crate::imu_handler;
 use anyhow::{bail, ensure, Context, Result};
@@ -13,6 +14,28 @@ use tracing::{field::debug, instrument, trace, Span};
 
 const WAIT_TIMEOUT: u32 = 200;
 const WAIT_TIMEOUT_SUBCMD: u32 = 10;
+
+/// Every output report has to be padded to this size over USB.
+const USB_PACKET_LEN: usize = 64;
+/// Output report ID of the USB-only proprietary commands (`80 xx`).
+const USB_COMMAND_ID: u8 = 0x80;
+/// Input report ID of the replies to the USB-only commands (`81 xx`).
+const USB_REPLY_ID: u8 = 0x81;
+const USB_REPLY_TIMEOUT: Duration = Duration::from_millis(100);
+const USB_COMMAND_RETRIES: u32 = 5;
+
+/// USB-only proprietary commands.
+///
+/// <https://github.com/dekuNukem/Nintendo_Switch_Reverse_Engineering/blob/master/USB-HID-Notes.md>
+#[derive(Debug, Clone, Copy)]
+#[repr(u8)]
+enum UsbCommand {
+    Status = 0x01,
+    Handshake = 0x02,
+    HighSpeed = 0x03,
+    /// Only talk over USB, without timing out and reverting to Bluetooth.
+    ForceUsb = 0x04,
+}
 
 #[derive(Debug, Clone)]
 pub struct Report {
@@ -39,6 +62,7 @@ pub struct JoyCon {
     enable_ir_loop: bool,
     imu_handler: crate::imu_handler::Handler,
     device_type: WhichController,
+    usb: bool,
 }
 
 impl JoyCon {
@@ -51,6 +75,8 @@ impl JoyCon {
             JOYCON_CHARGING_GRIP => panic!("unsupported charging grip"),
             _ => panic!("unknown controller type"),
         };
+        // hidapi only reports an interface number for USB HID devices.
+        let usb = info.interface_number() >= 0;
         let mut joycon = JoyCon {
             device,
             info,
@@ -68,8 +94,12 @@ impl JoyCon {
                 imu::AccSens::default(),
             ),
             device_type,
+            usb,
         };
 
+        if joycon.usb {
+            joycon.setup_usb()?;
+        }
         joycon.call_subcmd_wait(SubcommandRequest::disable_shipment_mode())?;
         joycon.set_report_mode_standard()?;
         Ok(joycon)
@@ -79,21 +109,88 @@ impl JoyCon {
         self.device_type == WhichController::RightJoyCon
     }
 
+    /// Whether the controller is connected over USB (instead of Bluetooth).
+    pub fn is_usb(&self) -> bool {
+        self.usb
+    }
+
+    /// Over USB, the controller only sends regular reports after this
+    /// handshake, and reverts to Bluetooth unless forced to stay on USB.
+    /// Same sequence as SDL's HIDAPI Switch driver.
+    #[instrument(level = "info", skip(self), err)]
+    fn setup_usb(&mut self) -> Result<()> {
+        ensure!(
+            self.usb_command(UsbCommand::Status, true)?,
+            "no reply to the USB status command"
+        );
+        // Clones may not reply to these, so like SDL we don't fail on them.
+        self.usb_command(UsbCommand::Handshake, true)?;
+        self.usb_command(UsbCommand::HighSpeed, true)?;
+        // The baud rate switch only takes effect after a second handshake.
+        self.usb_command(UsbCommand::Handshake, true)?;
+        ensure!(
+            self.usb_command(UsbCommand::ForceUsb, false)?,
+            "failed to force USB mode"
+        );
+        Ok(())
+    }
+
+    /// Returns whether the command was written (and acknowledged, if `wait_reply`).
+    fn usb_command(&mut self, command: UsbCommand, wait_reply: bool) -> Result<bool> {
+        let mut buf = [0u8; USB_PACKET_LEN];
+        buf[0] = USB_COMMAND_ID;
+        buf[1] = command as u8;
+        for _ in 0..USB_COMMAND_RETRIES {
+            if self.device.write(&buf).is_err() {
+                continue;
+            }
+            if !wait_reply || self.wait_usb_reply(command)? {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    fn wait_usb_reply(&mut self, command: UsbCommand) -> Result<bool> {
+        let deadline = Instant::now() + USB_REPLY_TIMEOUT;
+        let mut buf = [0u8; 512];
+        while let Some(remaining) = deadline.checked_duration_since(Instant::now()) {
+            let timeout = remaining.as_millis().max(1) as i32;
+            let nb_read = self.device.read_timeout(&mut buf, timeout)?;
+            if nb_read >= 2 && buf[0] == USB_REPLY_ID && buf[1] == command as u8 {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
     #[instrument(level = "trace", skip(self), fields(special))]
     pub fn send(&mut self, report: &mut OutputReport) -> Result<()> {
         *report.packet_counter() = self.counter;
         self.counter = (self.counter + 1) & 0xf;
         Span::current().record("special", &report.is_special());
         trace!(out_report = %hex::encode(report.as_bytes()));
-        let nb_written = self.device.write(report.as_bytes())?;
-        assert_eq!(nb_written, report.byte_size());
+        let bytes = report.as_bytes();
+        if self.usb && bytes.len() < USB_PACKET_LEN {
+            let mut buf = [0u8; USB_PACKET_LEN];
+            buf[..bytes.len()].copy_from_slice(bytes);
+            let nb_written = self.device.write(&buf)?;
+            assert_eq!(nb_written, USB_PACKET_LEN);
+        } else {
+            let nb_written = self.device.write(bytes)?;
+            assert_eq!(nb_written, report.byte_size());
+        }
         Ok(())
     }
 
     #[instrument(level = "trace", skip(self), fields(special, report))]
     pub fn recv(&mut self) -> Result<InputReport> {
         let mut report = InputReport::new();
-        let nb_read = self.device.read(report.as_bytes_mut())?;
+        let mut nb_read = self.device.read(report.as_bytes_mut())?;
+        // Late replies to the USB-only commands aren't regular input reports.
+        while report.as_bytes_mut()[0] == USB_REPLY_ID {
+            nb_read = self.device.read(report.as_bytes_mut())?;
+        }
         assert!(nb_read >= report.len(), "{} < {}", nb_read, report.len());
         Span::current()
             .record("special", &report.is_special())
