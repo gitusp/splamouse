@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use enigo::*;
 use joycon::{
-    hidapi::HidApi,
+    hidapi::{BusType, HidApi},
     joycon_sys::{
         input::{BatteryLevel },
         light::{self, PlayerLight},
@@ -10,6 +10,7 @@ use joycon::{
     },
     JoyCon,
 };
+use std::panic::AssertUnwindSafe;
 use std::sync::{Mutex, Arc};
 use std::{
     time::Duration,
@@ -39,18 +40,19 @@ fn main() -> Result<()> {
     let mut api = HidApi::new()?;
     loop {
         api.refresh_devices()?;
-        // USB と Bluetooth の両方で見えている場合は USB を優先する(USB だけ interface_number >= 0)。
+        // USB と Bluetooth の両方で見えている場合は USB を優先する。
         if let Some(device_info) = api
             .device_list()
             .filter(|x| x.vendor_id() == NINTENDO_VENDOR_ID && HID_IDS.contains(&x.product_id()))
-            .min_by_key(|x| x.interface_number() < 0)
+            .min_by_key(|x| !matches!(x.bus_type(), BusType::Usb))
         {
             let device = device_info
                 .open_device(&api)
                 .with_context(|| format!("error opening the HID device {:?}", device_info))?;
 
             // NOTE: 接続が中途半端な際、ここでよくパニックする。
-            let _ = std::panic::catch_unwind(|| -> Result<()> {
+            // パニック後は device を捨てて再接続するだけなので AssertUnwindSafe で問題ない。
+            let _ = std::panic::catch_unwind(AssertUnwindSafe(|| -> Result<()> {
                 let joycon = JoyCon::new(device, device_info.clone())?;
                 eprintln!(
                     "Connected via {}",
@@ -58,7 +60,7 @@ fn main() -> Result<()> {
                 );
                 hid_main(joycon, gyro, stick).context("error running the command")?;
                 Ok(())
-            });
+            }));
         } else {
             eprintln!("No device found");
             thread::sleep(Duration::from_secs(1));

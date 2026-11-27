@@ -13,10 +13,10 @@ ir = ["image"]
 [dependencies]
 anyhow = "1.0"
 cgmath = { version = "0.18", optional = false, default-features = false }
-hidapi = { version = "1.2", default-features = false, features = ["linux-static-hidraw"] }
-image = { version = "0.24", features = ["png"], optional = true, default-features = false }
+hidapi = { version = "2.6", default-features = false, features = ["linux-static-hidraw"] }
+image = { version = "0.25", features = ["png"], optional = true, default-features = false }
 joycon-sys = { path = "../joycon-sys" }
 hid-gamepad-sys = { path = "../hid-gamepad-sys/" }
-enum-map = "0.6"
+enum-map = "3.1"
 tracing = "0.1"
 hex = "0.4"

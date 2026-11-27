@@ -75,8 +75,7 @@ impl JoyCon {
             JOYCON_CHARGING_GRIP => panic!("unsupported charging grip"),
             _ => panic!("unknown controller type"),
         };
-        // hidapi only reports an interface number for USB HID devices.
-        let usb = info.interface_number() >= 0;
+        let usb = matches!(info.bus_type(), hidapi::BusType::Usb);
         let mut joycon = JoyCon {
             device,
             info,
