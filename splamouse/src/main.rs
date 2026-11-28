@@ -39,6 +39,14 @@ const KEY_INTERVAL: Duration = Duration::from_millis(100);
 /// コントローラーが見つからないときや、接続が切れたときに探し直す間隔。
 const RETRY_INTERVAL: Duration = Duration::from_secs(1);
 
+/// ホイールの速さ(L スティックを倒しきったときの加速の量、px、感度の倍率 1 あたり)。
+///
+/// ホイールはピクセル単位で送る。行単位(macOS では 1 行 10px)だと 1 行ずつ飛ぶので、
+/// 軽く倒したときに 1 行分たまるたびにガクッと動いてしまう。ピクセル単位のイベントは
+/// macOS が連続したスクロール(トラックパッドと同じ扱い)とするので、1px ずつ滑らかに動く。
+/// 行単位で送っていた頃は 1/16 行(10/16 px)だったが、ピクセル単位では遅く感じたので 2 倍にした。
+const WHEEL_SPEED: f64 = 20.0 / 16.0;
+
 /// ポインタを画面中央へ戻すアニメーションの長さ(MOUSE_INTERVAL × 40 = 200ms)。
 const GLIDE_STEPS: u32 = 40;
 
@@ -412,8 +420,8 @@ fn move_cursor(
         // どちらも斜めに動かせるが、ホイールは縦横の近くではその向きにそろえる。
         let [lx, ly] = snapped_deadzone(left);
         let [rx, ry] = radial_deadzone(right);
-        let dlx = wheel_x.step(lx * stick / 16.0, elapsed, 0.0);
-        let dly = wheel_y.step(-ly * stick / 16.0, elapsed, 0.0);
+        let dlx = wheel_x.step(lx * stick * WHEEL_SPEED, elapsed, 0.0);
+        let dly = wheel_y.step(-ly * stick * WHEEL_SPEED, elapsed, 0.0);
         // モーション分(読み取りスレッドで、コントローラーの姿勢に合わせて回してある)
         let drx = mouse_x.step(rx * stick * 2.0, elapsed, turn_x * gyro);
         let dry = mouse_y.step(-ry * stick * 2.0, elapsed, turn_y * gyro);
@@ -423,10 +431,10 @@ fn move_cursor(
             // enigo 0.6 は移動量 0 でもイベントを送るため、0 のときは呼ばない。
             // (止まっている間もマウスを動かしたことになり、スリープやスクリーンセーバーが効かなくなる)
             if dlx != 0.0 {
-                let _ = enigo.scroll(dlx as i32, Axis::Horizontal);
+                let _ = enigo.smooth_scroll(dlx as i32, Axis::Horizontal);
             }
             if dly != 0.0 {
-                let _ = enigo.scroll(dly as i32, Axis::Vertical);
+                let _ = enigo.smooth_scroll(dly as i32, Axis::Vertical);
             }
             // 中央へ戻す要求が来たら、その時点の位置からアニメーションを始める。
             if center.swap(false, Ordering::Relaxed) {
